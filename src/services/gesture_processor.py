@@ -1,15 +1,21 @@
 import os
 from collections import deque
 import numpy as np
+from pathlib import Path
 
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+MODEL_PATH = Path(__file__).resolve().parent
+
+file_path = MODEL_PATH / "hand_landmarker.task"
 
 class GestureProcessor:
-    def __init__(self, model_path: str = "hand_landmarker.task", sequence_length: int = 30):
+    def __init__(self, model_path: str = str(file_path), sequence_length: int = 30):
         # STEP 1 & 2: Configure and create HandLandmarker using the Tasks API
+
+
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.HandLandmarkerOptions(
             base_options=base_options,

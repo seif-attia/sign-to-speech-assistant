@@ -10,7 +10,7 @@ def main(page: ft.Page) -> None:
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
 
-    camera_feed: CameraView = CameraView(width=320, height=420, lens_direction=fc.CameraLensDirection.BACK)
+    camera_feed: CameraView = CameraView(width=320, height=420, lens_direction=fc.CameraLensDirection.FRONT)
 
     page.add(ft.Column(
         alignment=ft.MainAxisAlignment.START,

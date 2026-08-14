@@ -65,7 +65,7 @@ class CameraView(ft.Column):
             bgcolor=ft.Colors.BLACK54,
             border_radius=8,
             padding=10,
-            border=ft.border.all(1, ft.Colors.BLUE_900),
+            border=ft.Border.all(1, ft.Colors.BLUE_900),
         )
 
         # Mount UI Elements to page
