@@ -2,7 +2,15 @@ import time
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from components.vector_view import VectorView
+import services.data as data
 
+""" 
+    To access the raw vector values 
+
+    Vector list form -> data.vector
+    string form -> data.formatted_vals
+"""
 
 class HandDetector:
     """
@@ -10,9 +18,9 @@ class HandDetector:
     """
 
     def __init__(
-        self, model_path: str, num_hands: int = 2, ui_callback=None
+        self, model_path: str, num_hands: int = 2, HandDisplayView:VectorView = None
     ) -> None:
-        self.ui_callback = ui_callback
+        self.hand_display = HandDisplayView
 
         # Initialize MediaPipe Task options for streaming hand detection
         base_options = python.BaseOptions(model_asset_path=model_path)
@@ -28,8 +36,9 @@ class HandDetector:
         self, result, output_image, timestamp_ms: int
     ) -> None:
         """Internal callback invoked by MediaPipe when hand detection completes."""
-        if self.ui_callback:
-            self.ui_callback(result)
+        if self.hand_display:
+            self._on_hand_detected(result)
+            
 
     def process_frame(self, rgb_array) -> None:
         """
@@ -46,3 +55,29 @@ class HandDetector:
         """Releases C++ resources allocated by MediaPipe Task runner."""
         if hasattr(self, "landmarker"):
             self.landmarker.close()
+
+    def _on_hand_detected(self, result) -> None:
+        """
+        Processes MediaPipe HandLandmarker results into a fixed 126-dimensional float vector.
+        Vector layout: 2 hands * 21 landmarks * 3 coordinates (x, y, z).
+        Missing hands or landmarks are zero-padded to maintain consistent dimensionality.
+        """
+        data.vector = []
+        num_hands = len(result.hand_landmarks) if result.hand_landmarks else 0
+
+        for hand_idx in range(2):
+            if result.hand_landmarks and hand_idx < num_hands:
+                for lm in result.hand_landmarks[hand_idx]:
+                    data.vector.extend([round(lm.x, 3), round(lm.y, 3), round(lm.z, 3)])
+            else:
+                # Pad missing hand slot with 63 zeros (21 landmarks * 3 coordinates)
+                data.vector.extend([0.0] * 63)
+
+      
+        data.formatted_vals = ", ".join(f"{v:.3f}" for v in data.vector)
+        output_text = (
+            f"Hands: {num_hands} | Vector Dim: {len(data.vector)}\n\n"
+            f"[{data.formatted_vals}]"
+        )
+
+        self.hand_display.update_data(output_text)

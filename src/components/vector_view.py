@@ -8,6 +8,7 @@ class VectorView(ft.Container):
     """
 
     def __init__(self, width: int = 300) -> None:
+
         # Monospace selectable text control to display landmark coordinate strings
         self.text_control = ft.Text(
             value="Waiting for MediaPipe landmarks...",
@@ -40,3 +41,4 @@ class VectorView(ft.Container):
     def update_data(self, text: str) -> None:
         """Helper method to update displayed text content."""
         self.text_control.value = text
+        self.page.update()
