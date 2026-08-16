@@ -10,7 +10,6 @@ dependencies = [
     "flet-camera>=0.86.4",
     "flet-permission-handler>=0.86.4",
     "mediapipe>=1.0.0",
-    "opencv-python>=5.0.0.93",
 ]
 
 [dependency-groups]
