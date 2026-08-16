@@ -1,12 +1,14 @@
-import asyncio
-import time
 import flet as ft
 import flet_camera as fc
 import flet_permission_handler as fh
-from services.gesture_processor import GestureProcessor
 
 
 class CameraView(ft.Column):
+    """
+    Custom UI component wrapping the flet_camera control, managing permissions,
+    device camera discovery, driver initialization, and status updates.
+    """
+
     def __init__(
         self,
         width: int,
@@ -16,20 +18,17 @@ class CameraView(ft.Column):
     ) -> None:
         super().__init__()
 
-        # Camera Properties
+        # Camera Configuration Settings
         self.camera_width: int = width
         self.camera_height: int = height
         self.camera_resolution: fc.ResolutionPreset = resolution
         self.camera_lens_direction: fc.CameraLensDirection = lens_direction
 
-        # Gesture Processor Instance
-        self.processor = GestureProcessor(sequence_length=30)
-        self.is_processing = False
-
-        # Camera UI Elements
+        # Native Camera & Permission Handler Objects
         self.camera: fc.Camera = fc.Camera(preview_enabled=True, expand=True)
         self.permission_handler = fh.PermissionHandler()
 
+        # Viewport Surface Container
         self.camera_container = ft.Container(
             content=self.camera,
             width=self.camera_width,
@@ -38,51 +37,26 @@ class CameraView(ft.Column):
             border_radius=8,
         )
 
-        self.status_text = ft.Text(value="Initializing camera....", color=ft.Colors.GREY_400)
-
-        # --- DEDICATED SCROLLABLE VECTOR TEST PANEL ---
-        self.vector_title = ft.Text(
-            value="Live Landmark Vector (126 Floats)",
-            color=ft.Colors.BLUE_400,
-            size=13,
-            weight=ft.FontWeight.BOLD,
+        # Status Label displaying initialization steps or permission errors
+        self.status_text = ft.Text(
+            value="Initializing camera....", color=ft.Colors.GREY_400
         )
 
-        self.vector_text = ft.Text(
-            value="Waiting for hand landmarks...",
-            color=ft.Colors.GREEN_300,
-            size=11,
-            font_family="monospace",
-        )
-
-        self.vector_box = ft.Container(
-            content=ft.Column(
-                controls=[self.vector_text],
-                scroll=ft.ScrollMode.ALWAYS,
-            ),
-            width=self.camera_width,
-            height=160,  # Scrollable debug window height
-            bgcolor=ft.Colors.BLACK54,
-            border_radius=8,
-            padding=10,
-            border=ft.Border.all(1, ft.Colors.BLUE_900),
-        )
-
-        # Mount UI Elements to page
-        self.controls = [
-            self.camera_container,
-            self.status_text,
-            self.vector_title,
-            self.vector_box,
-        ]
+        self.controls = [self.camera_container, self.status_text]
         self.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         self.alignment = ft.MainAxisAlignment.START
 
     def did_mount(self) -> None:
+        """Lifecycle hook called when component is attached to page tree."""
         self.page.run_task(self._setup_camera)
 
     async def _setup_camera(self) -> None:
-        has_permission: fh.PermissionStatus | None = self.permission_handler.request(fh.Permission.CAMERA)
+        """Asynchronously requests camera permissions and initializes selected camera lens."""
+
+        # Request OS camera permission
+        has_permission: fh.PermissionStatus | None = (
+            self.permission_handler.request(fh.Permission.CAMERA)
+        )
 
         if not has_permission:
             self.status_text.value = "Camera permission denied"
@@ -92,24 +66,24 @@ class CameraView(ft.Column):
 
         self.status_text.value = "Checking available cameras..."
         self.update()
-
-        cameras: list[fc.CameraDescription] = await self.camera.get_available_cameras()
+        cameras: list[fc.CameraDescription] = (
+            await self.camera.get_available_cameras()
+        )
         if not cameras:
             self.status_text.value = "No camera detected on this device"
             self.status_text.color = ft.Colors.RED
             self.update()
             return
 
+        # Select target camera matching requested lens direction (e.g. Front camera)
         target_indx = 0
         for idx, cam in enumerate(cameras):
             if cam.lens_direction == self.camera_lens_direction:
-                target_indx = idx
+                target_indx: int = idx
                 break
-
         try:
-            self.status_text.value = "Initializing camera..."
+            self.status_text.value = "Initiliazing camera..."
             self.update()
-
             await self.camera.initialize(
                 description=cameras[target_indx],
                 resolution_preset=self.camera_resolution,
@@ -118,62 +92,7 @@ class CameraView(ft.Column):
             self.status_text.value = "Camera ready."
             self.status_text.color = ft.Colors.GREEN_500
             self.update()
-
-            # Start real-time gesture extraction loop
-            self.is_processing = True
-            self.page.run_task(self._start_gesture_processing)
-
         except Exception as err:
-            self.status_text.value = f"Initialization Error: {err}"
+            self.status_text.value = f"Initilization Error: {err}"
             self.status_text.color = ft.Colors.RED
             self.update()
-
-    async def _start_gesture_processing(self) -> None:
-        """Loop updating the live scrollable vector display in real time."""
-        target_fps = 15
-        frame_interval = 1.0 / target_fps
-
-        while self.is_processing:
-            start_time = time.time()
-            try:
-                image_path = await self.camera.take_picture()
-
-                if image_path:
-                    sequence_matrix = self.processor.process_image_path(image_path)
-                    latest_vector = sequence_matrix[-1]  # Extract current 126 float array
-
-                    # Check if any hand was detected (non-zero array entries)
-                    is_hand_detected = any(v != 0.0 for v in latest_vector)
-
-                    if is_hand_detected:
-                        h1_vals = latest_vector[:63]
-                        h2_vals = latest_vector[63:]
-
-                        lines = ["=== HAND 1 (21 Joints x,y,z) ==="]
-                        for i in range(0, 63, 3):
-                            j_idx = i // 3
-                            lines.append(
-                                f"J{j_idx:02d}: x={h1_vals[i]:+.3f}, y={h1_vals[i+1]:+.3f}, z={h1_vals[i+2]:+.3f}"
-                            )
-
-                        lines.append("\n=== HAND 2 (21 Joints x,y,z) ===")
-                        for i in range(0, 63, 3):
-                            j_idx = i // 3
-                            lines.append(
-                                f"J{j_idx:02d}: x={h2_vals[i]:+.3f}, y={h2_vals[i+1]:+.3f}, z={h2_vals[i+2]:+.3f}"
-                            )
-
-                        self.vector_text.value = "\n".join(lines)
-                        self.vector_text.color = ft.Colors.GREEN_300
-                    else:
-                        self.vector_text.value = "No hands detected in frame.\nVector filled with 126 zeros [0.00, ...]"
-                        self.vector_text.color = ft.Colors.AMBER_300
-
-                    self.update()
-
-            except Exception as e:
-                print(f"Frame processing error: {e}")
-
-            elapsed = time.time() - start_time
-            sleep_duration = max(0.01, frame_interval - elapsed)
-            await asyncio.sleep(sleep_duration)
