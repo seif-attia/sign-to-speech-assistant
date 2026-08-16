@@ -9,6 +9,7 @@ dependencies = [
     "flet>=0.86.4",
     "flet-camera>=0.86.4",
     "flet-permission-handler>=0.86.4",
+    "mediapipe>=1.0.0",
 ]
 
 [dependency-groups]
@@ -31,6 +32,5 @@ product = "signassistant"
 company = "Flet"
 copyright = "Copyright (C) 2023-2026 by Flet"
 permission = ["camera"]
-
 [tool.flet.app]
 path = "src"
