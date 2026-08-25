@@ -59,21 +59,46 @@ class HandDetector:
     def _on_hand_detected(self, result) -> None:
         """
         Processes MediaPipe HandLandmarker results into a fixed 126-dimensional float vector.
-        Vector layout: 2 hands * 21 landmarks * 3 coordinates (x, y, z).
-        Missing hands or landmarks are zero-padded to maintain consistent dimensionality.
+        Vector layout: Right Hand (63 values) + Left Hand (63 values).
+        Missing hands or landmarks are zero-padded.
+        Coordinates are relative to the wrist position (landmark 0) for translation invariance.
         """
-        data.vector = []
+        right_hand_vector = [0.0] * 63
+        left_hand_vector = [0.0] * 63
+        
         num_hands = len(result.hand_landmarks) if result.hand_landmarks else 0
 
-        for hand_idx in range(2):
-            if result.hand_landmarks and hand_idx < num_hands:
-                for lm in result.hand_landmarks[hand_idx]:
-                    data.vector.extend([round(lm.x, 3), round(lm.y, 3), round(lm.z, 3)])
-            else:
-                # Pad missing hand slot with 63 zeros (21 landmarks * 3 coordinates)
-                data.vector.extend([0.0] * 63)
+        if result.hand_landmarks and result.handedness:
+            for hand_idx, landmarks in enumerate(result.hand_landmarks):
+                if hand_idx >= 2:
+                    break
+                
+                # Identify if hand is Left or Right
+                category = result.handedness[hand_idx][0]
+                hand_label = category.category_name # "Right" or "Left"
 
-      
+                # Get wrist coordinates (landmark 0) to make others relative
+                wrist_x = landmarks[0].x
+                wrist_y = landmarks[0].y
+                wrist_z = landmarks[0].z
+
+                hand_coords = []
+                for lm in landmarks:
+                    rel_x = round(lm.x - wrist_x, 3)
+                    rel_y = round(lm.y - wrist_y, 3)
+                    rel_z = round(lm.z - wrist_z, 3)
+                    hand_coords.extend([rel_x, rel_y, rel_z])
+
+                # Due to camera mirroring (flip_horizontal=True), MediaPipe's handedness is inverted.
+                # Physical Right Hand appears as "Left", Physical Left Hand appears as "Right".
+                if hand_label == "Left":
+                    right_hand_vector = hand_coords
+                elif hand_label == "Right":
+                    left_hand_vector = hand_coords
+
+        # Combine into the final 126-dimensional vector
+        data.vector = right_hand_vector + left_hand_vector
+
         data.formatted_vals = ", ".join(f"{v:.3f}" for v in data.vector)
         output_text = (
             f"Hands: {num_hands} | Vector Dim: {len(data.vector)}\n\n"
