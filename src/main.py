@@ -1,7 +1,7 @@
-import asyncio
 import flet as ft
 from frontend.views.home_view import HomeView
 from frontend.views.sign_to_speech_view import SignToSpeechView
+from frontend.views.speech_text_view import SpeechToTextView
 
 
 async def main(page: ft.Page) -> None:
@@ -26,6 +26,9 @@ async def main(page: ft.Page) -> None:
         # Stack the target page on top
         if page.route == "/sign-speech":
             page.views.append(SignToSpeechView(page))
+
+        if page.route == "/speech-text":
+            page.views.append(SpeechToTextView(page))
             
         page.update()
 
@@ -50,6 +53,8 @@ async def main(page: ft.Page) -> None:
     page.on_route_change = route_change
     page.on_view_pop = view_pop
     page.on_disconnect = on_disconnect
+
+
     # Initialize app at the home route
     await route_change()
 

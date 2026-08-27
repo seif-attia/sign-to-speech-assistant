@@ -98,6 +98,8 @@ class HandDetector:
 
         # Combine into the final 126-dimensional vector
         data.vector = right_hand_vector + left_hand_vector
+        data.right_hand_vector = right_hand_vector
+        data.left_hand_vector = left_hand_vector
 
         data.formatted_vals = ", ".join(f"{v:.3f}" for v in data.vector)
         output_text = (

@@ -55,7 +55,7 @@ class CameraView(ft.Column):
 
         # Request OS camera permission
         has_permission: fh.PermissionStatus | None = (
-            self.permission_handler.request(fh.Permission.CAMERA)
+            await self.permission_handler.request(fh.Permission.CAMERA)
         )
 
         if not has_permission:
