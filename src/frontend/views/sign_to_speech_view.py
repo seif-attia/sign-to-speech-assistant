@@ -14,7 +14,7 @@ MODEL_PATH = str(BASE_DIR / "hand_landmarker.task")
 
 # Standard layout viewport dimensions for the mobile camera container
 VIEWPORT_WIDTH = 360
-VIEWPORT_HEIGHT = 450
+VIEWPORT_HEIGHT = 380
 
 
 class SignToSpeechView(ft.View):
@@ -27,8 +27,8 @@ class SignToSpeechView(ft.View):
             horizontal_alignment = ft.CrossAxisAlignment.CENTER,
             vertical_alignment = ft.MainAxisAlignment.START,
             appbar = ft.AppBar(
-                leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda: asyncio.create_task(self.app_page.push_route("/"))),
-                title=ft.Text("Sign To Speech"),
+                leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: asyncio.create_task(self.close())),
+                title=ft.Text("Sign To Speech", color= ft.Colors.WHITE),
                 bgcolor=ft.Colors.BLUE
             ),
         )
@@ -62,6 +62,10 @@ class SignToSpeechView(ft.View):
          ]
 
         self.processor.start()
+
+    async def close(self):
+        await self.cleanup_async()
+        await self.app_page.push_route("/")
 
 
     async def cleanup_async(self):
