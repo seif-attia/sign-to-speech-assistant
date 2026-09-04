@@ -1,4 +1,5 @@
 import time
+from typing import Callable, Optional
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -18,9 +19,16 @@ class HandDetector:
     """
 
     def __init__(
-        self, model_path: str, num_hands: int = 2, HandDisplayView:VectorView = None
+        self,
+        model_path: str,
+        num_hands: int = 2,
+        HandDisplayView: VectorView = None,
+        classifier=None,
+        prediction_callback: Optional[Callable[[str, float], None]] = None,
     ) -> None:
         self.hand_display = HandDisplayView
+        self.classifier = classifier
+        self.prediction_callback = prediction_callback
 
         # Initialize MediaPipe Task options for streaming hand detection
         base_options = python.BaseOptions(model_asset_path=model_path)
@@ -101,9 +109,24 @@ class HandDetector:
         data.right_hand_vector = right_hand_vector
         data.left_hand_vector = left_hand_vector
 
+        # Select primary active hand for 63-dim sign classifier (prefer right, fallback to left)
+        active_hand = right_hand_vector if any(right_hand_vector) else left_hand_vector
+        prediction_info = ""
+
+        if self.classifier and any(active_hand):
+            prediction = self.classifier.process_hand_vector(active_hand)
+            if prediction:
+                sign_label, confidence = prediction
+                data.predicted_sign = sign_label
+                data.confidence = confidence
+                prediction_info = f"\n\n🎯 Recognized: {sign_label.upper()} ({confidence * 100:.1f}%)"
+                if self.prediction_callback:
+                    self.prediction_callback(sign_label, confidence)
+
         data.formatted_vals = ", ".join(f"{v:.3f}" for v in data.vector)
         output_text = (
-            f"Hands: {num_hands} | Vector Dim: {len(data.vector)}\n\n"
+            f"Hands: {num_hands} | Vector Dim: {len(data.vector)}"
+            f"{prediction_info}\n\n"
             f"[{data.formatted_vals}]"
         )
 
