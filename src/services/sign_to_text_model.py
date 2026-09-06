@@ -14,14 +14,19 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL_PATH = str(BASE_DIR / "sign_language_model.tflite")
+HOLISTIC_MODEL_PATH = BASE_DIR / "sign_language_holistic_model.tflite"
+DEFAULT_MODEL_PATH = str(
+    HOLISTIC_MODEL_PATH
+    if HOLISTIC_MODEL_PATH.exists()
+    else (BASE_DIR / "sign_language_model.tflite")
+)
 DEFAULT_LABELS_PATH = str(BASE_DIR / "labels.json")
 
 
 class SignToTextClassifier:
     """
     Gesture classification service utilizing Google LiteRT CompiledModel
-    and HardwareAccelerator (GPU/CPU) with a 20-frame temporal sliding window.
+    and HardwareAccelerator (GPU/CPU) with a temporal sliding window.
     """
 
     def __init__(
@@ -29,9 +34,9 @@ class SignToTextClassifier:
         model_path: str = DEFAULT_MODEL_PATH,
         labels_path: Optional[str] = DEFAULT_LABELS_PATH,
         labels: Optional[List[str]] = None,
-        sequence_length: int = 10,
-        feature_dim: int = 126,
-        num_classes: int = 411,
+        sequence_length: int = 30,
+        feature_dim: int = 525,
+        num_classes: int = 2000,
         threshold: float = 0.30,
         prefer_hardware: Optional["HardwareAccelerator"] = None,
         on_prediction: Optional[Callable[[str, float], None]] = None,
@@ -160,12 +165,20 @@ class SignToTextClassifier:
         self, hand_vector: List[float]
     ) -> Optional[Tuple[str, float]]:
         """
-        Ingests a 63-dimensional landmark vector.
-        When 20 consecutive valid frames have accumulated, runs LiteRT inference.
+        Ingests a feature vector (e.g., 525-dimensional holistic vector).
+        When sequence_length consecutive valid frames have accumulated, runs LiteRT inference.
         Returns (predicted_label, confidence) if confidence exceeds threshold, else None.
         """
         # Validate vector size
-        if not hand_vector or len(hand_vector) != self.feature_dim:
+        if not hand_vector:
+            return None
+
+        if len(hand_vector) != self.feature_dim:
+            if self.on_status and not getattr(self, "_logged_dim_mismatch", False):
+                self._logged_dim_mismatch = True
+                self.on_status(
+                    f"Model expects {self.feature_dim} features, received {len(hand_vector)}"
+                )
             return None
 
         self.frame_buffer.append(hand_vector)
@@ -241,3 +254,6 @@ class SignToTextClassifier:
             self.input_buffers = None
             self.output_buffers = None
             self.is_loaded = False
+
+    # Alias for holistic vector processing
+    process_holistic_vector = process_hand_vector

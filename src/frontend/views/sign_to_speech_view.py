@@ -6,15 +6,20 @@ import flet_camera as fc
 from components.camera_view import CameraView
 from components.vector_view import VectorView
 from services.mobile_processor import MobileFrameProcessor
-from services.hand_detector import HandDetector
+from services.holistic_detector import HolisticDetector
 from services.sign_to_text_model import SignToTextClassifier
 
 from frontend.components.bottom_nav_bar import create_nav_bar
 
 # Absolute path resolution for model binaries and assets
 BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
-MODEL_PATH = str(BASE_DIR / "hand_landmarker.task")
-SIGN_MODEL_PATH = str(BASE_DIR / "sign_language_model.tflite")
+MODEL_PATH = str(BASE_DIR / "holistic_landmarker.task")
+HOLISTIC_SIGN_MODEL_PATH = BASE_DIR / "sign_language_holistic_model.tflite"
+SIGN_MODEL_PATH = str(
+    HOLISTIC_SIGN_MODEL_PATH
+    if HOLISTIC_SIGN_MODEL_PATH.exists()
+    else (BASE_DIR / "sign_language_model.tflite")
+)
 LABELS_PATH = str(BASE_DIR / "labels.json")
 
 # Standard layout viewport dimensions for the mobile camera container
@@ -94,11 +99,11 @@ class SignToSpeechView(ft.View):
         )
 
         # --- Hardware Capture & Detection Services ---
-        self.detector = HandDetector(
+        self.detector = HolisticDetector(
             model_path=MODEL_PATH,
-            num_hands=2,
             HandDisplayView=self.hand_display,
             classifier=self.classifier,
+            flip_horizontal=True,
         )
         self.processor = MobileFrameProcessor(
             camera_control=self.camera_view_component.camera,
