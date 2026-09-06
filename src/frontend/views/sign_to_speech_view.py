@@ -9,6 +9,8 @@ from services.mobile_processor import MobileFrameProcessor
 from services.hand_detector import HandDetector
 from services.sign_to_text_model import SignToTextClassifier
 
+from frontend.components.bottom_nav_bar import create_nav_bar
+
 # Absolute path resolution for model binaries and assets
 BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
 MODEL_PATH = str(BASE_DIR / "hand_landmarker.task")
@@ -24,16 +26,22 @@ class SignToSpeechView(ft.View):
     def __init__(self, page: ft.Page):
 
         self.app_page = page
+
+        async def close(e: ft.ControlEvent):
+            await self.cleanup_async()
+            await self.app_page.push_route("/")
+
         super().__init__(
             route = '/sign-speech',
             padding = ft.Padding.only(top=15, left=15, right=15, bottom=15),
             horizontal_alignment = ft.CrossAxisAlignment.CENTER,
             vertical_alignment = ft.MainAxisAlignment.START,
             appbar = ft.AppBar(
-                leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: asyncio.create_task(self.close())),
-                title=ft.Text("Sign To Speech", color= ft.Colors.WHITE),
-                bgcolor=ft.Colors.BLUE
+                leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=close),
+                title=ft.Text("Sign To Speech", color= ft.Colors.BLACK),
+                bgcolor=ft.Colors.SURFACE
             ),
+            navigation_bar= create_nav_bar(1, self.app_page)
         )
       
         # --- UI Components ---
@@ -141,11 +149,6 @@ class SignToSpeechView(ft.View):
             self.confidence_text.update()
         except Exception:
             pass
-
-    async def close(self):
-        await self.cleanup_async()
-        await self.app_page.push_route("/")
-
 
     async def cleanup_async(self):
         """ Call this before destroying the view to prevent memory leaks. """
