@@ -5,6 +5,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from components.vector_view import VectorView
 import services.data as data
+from services.holistic_detector import HolisticDetector
 
 """ 
     To access the raw vector values 

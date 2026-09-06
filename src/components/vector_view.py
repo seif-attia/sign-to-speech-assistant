@@ -11,7 +11,7 @@ class VectorView(ft.Container):
 
         # Monospace selectable text control to display landmark coordinate strings
         self.text_control = ft.Text(
-            value="Waiting for MediaPipe landmarks...",
+            value="Waiting for MediaPipe holistic landmarks...",
             color="#00FF00",
             size=12,
             font_family="monospace",
@@ -21,7 +21,7 @@ class VectorView(ft.Container):
             content=ft.Column(
                 controls=[
                     ft.Text(
-                        "126-Dim Landmark Vector",
+                        "525-Dim Holistic Landmark Vector",
                         weight=ft.FontWeight.BOLD,
                         size=16,
                     ),
