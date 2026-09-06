@@ -80,8 +80,9 @@ class SignToSpeechView(ft.View):
         self.classifier = SignToTextClassifier(
             model_path=SIGN_MODEL_PATH,
             labels_path=LABELS_PATH,
-            threshold=0.65,
+            threshold=0.5,
             on_prediction=self._on_sign_recognized,
+            on_status=self._on_status_update,
         )
 
         # --- Hardware Capture & Detection Services ---
@@ -93,7 +94,7 @@ class SignToSpeechView(ft.View):
         )
         self.processor = MobileFrameProcessor(
             camera_control=self.camera_view_component.camera,
-            detector=self.detector, target_fps=12,
+            detector=self.detector, target_fps=30,
             rotation_angle=90, flip_horizontal=True,
         )
 
@@ -115,10 +116,29 @@ class SignToSpeechView(ft.View):
 
     def _on_sign_recognized(self, label: str, confidence: float) -> None:
         """Callback invoked when high-confidence sign is inferred."""
-        self.prediction_text.value = label.upper()
+        is_confident = confidence >= (self.classifier.threshold if self.classifier else 0.3)
+        if is_confident:
+            self.prediction_text.value = f"🎯 {label.upper()}"
+            self.prediction_text.color = ft.Colors.GREEN_800
+        else:
+            self.prediction_text.value = label.upper()
+            self.prediction_text.color = ft.Colors.BLUE_900
+
         self.confidence_text.value = f"Confidence: {confidence * 100:.1f}%"
         try:
-            self.app_page.update()
+            self.prediction_text.update()
+            self.confidence_text.update()
+        except Exception:
+            pass
+
+    def _on_status_update(self, status_msg: str) -> None:
+        """Callback invoked while buffering gesture frames."""
+        self.prediction_text.value = "Tracking hand..."
+        self.prediction_text.color = ft.Colors.AMBER_800
+        self.confidence_text.value = status_msg
+        try:
+            self.prediction_text.update()
+            self.confidence_text.update()
         except Exception:
             pass
 

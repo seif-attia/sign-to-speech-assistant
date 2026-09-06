@@ -109,12 +109,13 @@ class HandDetector:
         data.right_hand_vector = right_hand_vector
         data.left_hand_vector = left_hand_vector
 
-        # Select primary active hand for 63-dim sign classifier (prefer right, fallback to left)
+        # Select active hand to decide if we run the model (though we still pass 126-dim)
         active_hand = right_hand_vector if any(right_hand_vector) else left_hand_vector
         prediction_info = ""
 
-        if self.classifier and any(active_hand):
-            prediction = self.classifier.process_hand_vector(active_hand)
+        # Feed the full 126-dim vector to maintain temporal sliding window pacing
+        if self.classifier:
+            prediction = self.classifier.process_hand_vector(data.vector)
             if prediction:
                 sign_label, confidence = prediction
                 data.predicted_sign = sign_label

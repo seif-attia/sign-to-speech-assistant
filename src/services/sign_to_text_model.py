@@ -29,12 +29,13 @@ class SignToTextClassifier:
         model_path: str = DEFAULT_MODEL_PATH,
         labels_path: Optional[str] = DEFAULT_LABELS_PATH,
         labels: Optional[List[str]] = None,
-        sequence_length: int = 20,
-        feature_dim: int = 63,
+        sequence_length: int = 10,
+        feature_dim: int = 126,
         num_classes: int = 411,
-        threshold: float = 0.65,
+        threshold: float = 0.30,
         prefer_hardware: Optional["HardwareAccelerator"] = None,
         on_prediction: Optional[Callable[[str, float], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.model_path = model_path
         self.sequence_length = sequence_length
@@ -42,6 +43,7 @@ class SignToTextClassifier:
         self.num_classes = num_classes
         self.threshold = threshold
         self.on_prediction = on_prediction
+        self.on_status = on_status
         self.prefer_hardware = prefer_hardware
 
         # Sliding window buffer of the last 20 frames
@@ -116,11 +118,32 @@ class SignToTextClassifier:
 
                 self.model = compiled
                 self.active_accelerator = accel.name
-                self.input_buffers = self.model.create_input_buffers()
-                self.output_buffers = self.model.create_output_buffers()
+                self.input_buffers = self.model.create_input_buffers(0)
+                self.output_buffers = self.model.create_output_buffers(0)
+
+                # Auto-detect tensor shapes from model signature
+                try:
+                    sigs = self.model.get_signature_list()
+                    if sigs:
+                        sig_key = list(sigs.keys())[0]
+                        in_details = self.model.get_input_tensor_details(sig_key)
+                        out_details = self.model.get_output_tensor_details(sig_key)
+                        if in_details:
+                            in_shape = list(in_details.values())[0].get("shape", [])
+                            if len(in_shape) >= 3:
+                                self.sequence_length = int(in_shape[1])
+                                self.feature_dim = int(in_shape[2])
+                                self.frame_buffer = collections.deque(maxlen=self.sequence_length)
+                        if out_details:
+                            out_shape = list(out_details.values())[0].get("shape", [])
+                            if len(out_shape) >= 2:
+                                self.num_classes = int(out_shape[1])
+                except Exception as shape_err:
+                    logger.warning(f"[SignClassifier] Could not auto-detect tensor shapes: {shape_err}")
+
                 self.is_loaded = True
                 self.load_error = None
-                print(f"[SignClassifier] Successfully compiled model with {accel.name} accelerator.")
+                logger.info(f"[SignClassifier] Successfully compiled model with {accel.name} accelerator (seq_len={self.sequence_length}, dim={self.feature_dim}, classes={self.num_classes}).")
                 return True
             except Exception as exc:
                 last_error = exc
@@ -141,14 +164,16 @@ class SignToTextClassifier:
         When 20 consecutive valid frames have accumulated, runs LiteRT inference.
         Returns (predicted_label, confidence) if confidence exceeds threshold, else None.
         """
-        # Validate vector size and discard empty/zero-padded frames
-        if not hand_vector or len(hand_vector) != self.feature_dim or not any(hand_vector):
+        # Validate vector size
+        if not hand_vector or len(hand_vector) != self.feature_dim:
             return None
 
         self.frame_buffer.append(hand_vector)
 
-        # Wait until we have a full temporal window of 20 frames
+        # Wait until we have a full temporal window of frames
         if len(self.frame_buffer) < self.sequence_length:
+            if self.on_status:
+                self.on_status(f"Buffering: {len(self.frame_buffer)}/{self.sequence_length} frames...")
             return None
 
         if not self.is_loaded or not self.model:
@@ -171,16 +196,30 @@ class SignToTextClassifier:
 
             predicted_idx = int(np.argmax(predictions))
             confidence = float(predictions[predicted_idx])
+            
+            raw_label = (
+                self.labels[predicted_idx]
+                if predicted_idx < len(self.labels)
+                else f"Sign_{predicted_idx}"
+            )
 
-            if confidence >= self.threshold:
-                predicted_label = (
-                    self.labels[predicted_idx]
-                    if predicted_idx < len(self.labels)
-                    else f"Sign_{predicted_idx}"
-                )
-                if self.on_prediction:
-                    self.on_prediction(predicted_label, confidence)
-                return predicted_label, confidence
+            # --- OpenCV-style Smoothing Logic ---
+            if confidence > self.threshold:
+                if not hasattr(self, 'predictions_history'):
+                    self.predictions_history = []
+                
+                self.predictions_history.append(raw_label)
+                self.predictions_history = self.predictions_history[-5:]
+                
+                if len(self.predictions_history) > 0:
+                    most_common_pred, count = collections.Counter(self.predictions_history).most_common(1)[0]
+                    if count >= 3:
+                        logger.debug(f"[SignClassifier] Prediction: {most_common_pred} ({confidence * 100:.1f}%)")
+                        if self.on_prediction:
+                            self.on_prediction(most_common_pred, confidence)
+                        return most_common_pred, confidence
+
+            return None
 
         except Exception as e:
             logger.error(f"[SignClassifier] Inference error: {e}")
