@@ -5,7 +5,7 @@ from components.mic_button import MicButton
 from frontend.components.bottom_nav_bar import create_nav_bar
 
 
-class SpeechToTextView(ft.View):
+class SpeechToSpeechView(ft.View):
     def __init__(self, page: ft.Page):
         self.app_page = page
 
@@ -16,12 +16,12 @@ class SpeechToTextView(ft.View):
         self.mic_button = MicButton()
 
         super().__init__(
-            route="/speech-text",
+            route="/speech-speech",
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             vertical_alignment=ft.MainAxisAlignment.CENTER,
             appbar=ft.AppBar(
                 leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=close),
-                title=ft.Text("Speech to Text", color=ft.Colors.BLACK),
+                title=ft.Text("Speech to Speech", color=ft.Colors.BLACK),
                 bgcolor=ft.Colors.SURFACE,
             ),
             navigation_bar=create_nav_bar(2, self.app_page),

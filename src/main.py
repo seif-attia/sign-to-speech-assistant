@@ -2,6 +2,7 @@ import flet as ft
 from frontend.views.home_view import HomeView
 from frontend.views.sign_to_speech_view import SignToSpeechView
 from frontend.views.speech_text_view import SpeechToTextView
+from frontend.views.speech_to_speech_view import SpeechToSpeechView
 
 
 async def main(page: ft.Page) -> None:
@@ -29,6 +30,9 @@ async def main(page: ft.Page) -> None:
 
         if page.route == "/speech-text":
             page.views.append(SpeechToTextView(page))
+
+        if page.route == "/speech-speech":
+            page.views.append(SpeechToSpeechView(page))
             
         page.update()
 

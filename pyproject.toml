@@ -33,6 +33,6 @@ org = "com.mycompany"
 product = "signassistant"
 company = "Flet"
 copyright = "Copyright (C) 2023-2026 by Flet"
-permission = ["camera"]
+permission = ["camera", "microphone"]
 [tool.flet.app]
 path = "src"
