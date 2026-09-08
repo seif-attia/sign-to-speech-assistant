@@ -7,3 +7,5 @@ face_vector: list = []
 predicted_sign: str = ""
 confidence: float = 0.0
 is_inferring: bool = False
+raw_audio_data: bytes = b""
+is_recording_audio: bool = False

@@ -11,6 +11,9 @@ class HomeView(ft.View):
         async def go_speech_text(e: ft.ControlEvent):
             await self.app_page.push_route("/speech-text")
 
+        async def go_speech_speech(e: ft.ControlEvent):
+            await self.app_page.push_route("/speech-speech")
+
         super().__init__(  
           route = '/',
           horizontal_alignment = ft.CrossAxisAlignment.CENTER,
@@ -30,7 +33,10 @@ class HomeView(ft.View):
                 icon=ft.Icons.MESSAGE,
                 on_click=go_speech_text
                 ),
-
+                ft.Button("Speech to Speech",
+                icon=ft.Icons.MIC,
+                on_click=go_speech_speech
+                ),
             ])
         ]
 

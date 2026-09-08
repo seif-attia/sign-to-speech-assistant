@@ -64,6 +64,7 @@ class SignToSpeechView(ft.View):
             height=VIEWPORT_HEIGHT,
             resolution=fc.ResolutionPreset.MEDIUM,
             lens_direction=fc.CameraLensDirection.FRONT,
+            on_lens_change=self._on_camera_flip
         )
         self.hand_display = VectorView(width=VIEWPORT_WIDTH - 30)
 
@@ -104,7 +105,7 @@ class SignToSpeechView(ft.View):
                 color=ft.Colors.ORANGE_900,
             ),
             bgcolor=ft.Colors.ORANGE_100,
-            border=ft.border.all(1, ft.Colors.ORANGE_300),
+            border=ft.Border.all(1, ft.Colors.ORANGE_300),
             border_radius=4,
             padding=ft.Padding.symmetric(horizontal=6, vertical=2),
             visible=False,
@@ -200,6 +201,7 @@ class SignToSpeechView(ft.View):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.START,
                 expand=True,
+                scroll= ft.ScrollMode.ALWAYS
             )
         ]
 
@@ -284,3 +286,8 @@ class SignToSpeechView(ft.View):
             self.detector.close()
         if self.classifier:
             self.classifier.close()
+
+    def _on_camera_flip(self, new_direction: fc.CameraLensDirection):
+        is_front = (new_direction == fc.CameraLensDirection.FRONT)
+        self.processor.flip_horizontal = is_front
+        self.detector.flip_horizontal = is_front
