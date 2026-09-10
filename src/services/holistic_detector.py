@@ -1,220 +1,297 @@
+import os
 import time
-from typing import Callable, List, Optional, Tuple
+from pathlib import Path
+from typing import Callable, Optional
 import numpy as np
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+
+# Cross-platform edge runtime (Works in Android APK via tflite-runtime)
+try:
+    from tflite_runtime.interpreter import Interpreter
+except ImportError:
+    try:
+        from tensorflow.lite.python.interpreter import Interpreter
+    except ImportError:
+        try:
+            from ai_edge_litert.interpreter import Interpreter
+        except ImportError:
+            raise RuntimeError("No compatible TFLite or LiteRT interpreter backend found.")
+
 from components.vector_view import VectorView
 import services.data as data
 
-# 100 Face Landmarks in sorted order (per FLET_INTEGRATION_SPEC.md)
-FACE_INDICES: List[int] = sorted([
-    # Chin (10)
-    18, 148, 150, 152, 175, 176, 199, 200, 377, 400,
-    # Lips (40)
-    0, 13, 14, 17, 37, 39, 40, 61, 78, 80, 81, 82, 84, 87, 88, 91, 95, 146,
-    178, 181, 185, 191, 267, 269, 270, 291, 308, 310, 311, 312, 314, 317,
-    318, 321, 324, 375, 402, 405, 409, 415,
-    # Nose (8)
-    1, 2, 4, 5, 6, 168, 195, 197,
-    # Eyes (32)
-    7, 33, 133, 144, 145, 153, 154, 155, 157, 158, 159, 160, 161, 163, 173, 246,
-    249, 263, 362, 373, 374, 380, 381, 382, 384, 385, 386, 387, 388, 390, 398, 466,
-    # Eyebrows (10)
-    63, 66, 70, 105, 107, 293, 296, 300, 334, 336
-])
+# 100 Selected Face Landmarks (matches training data & OpenCV test script exactly)
+CHIN = [152, 175, 199, 200, 18, 148, 176, 150, 377, 400]
+LIPS = [
+    61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
+    291, 146, 91, 181, 84, 17, 314, 405, 321, 375,
+    78, 191, 80, 81, 82, 13, 312, 311, 310, 415,
+    308, 95, 88, 178, 87, 14, 317, 402, 318, 324,
+]
+LEFT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+RIGHT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+LEFT_EYEBROW = [70, 63, 105, 66, 107]
+RIGHT_EYEBROW = [336, 296, 334, 293, 300]
+NOSE = [1, 2, 4, 5, 6, 168, 195, 197]
+
+FACE_LANDMARKS = sorted(list(set(CHIN + LIPS + LEFT_EYE + RIGHT_EYE + LEFT_EYEBROW + RIGHT_EYEBROW + NOSE)))
 
 
-def extract_and_normalize_holistic(
-    result, flip_horizontal: bool = True
-) -> Tuple[List[float], List[float], List[float], List[float], List[float]]:
-    """
-    Extracts and normalizes MediaPipe Holistic landmarks into a 525-element vector:
-      [0 : 99]    - Pose (33 landmarks x 3 coords)
-      [99 : 162]  - Left Hand (21 landmarks x 3 coords)
-      [162 : 225] - Right Hand (21 landmarks x 3 coords)
-      [225 : 525] - Face Keypoints (100 landmarks x 3 coords)
+class SubModelRunner:
+    """Handles preprocessing, interpreter execution, and output tensor extraction."""
 
-    Coordinates are centered and scaled by the Mid-Shoulder Centroid (Pose landmarks 11 & 12).
-    Undetected components remain strictly 0.0.
-    """
-    mid_x, mid_y, mid_z = 0.0, 0.0, 0.0
-    scale = 1.0
+    def __init__(self, model_path: str, num_threads: int = 2):
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file missing at: {model_path}")
 
-    # 1. Mid-Shoulder Centroid & Scale
-    pose_lms = getattr(result, "pose_landmarks", None)
-    if pose_lms and len(pose_lms) >= 13:
-        ls = pose_lms[11]  # Left Shoulder
-        rs = pose_lms[12]  # Right Shoulder
-        mid_x = (ls.x + rs.x) / 2.0
-        mid_y = (ls.y + rs.y) / 2.0
-        mid_z = (ls.z + rs.z) / 2.0
-        dist = np.sqrt((ls.x - rs.x) ** 2 + (ls.y - rs.y) ** 2 + (ls.z - rs.z) ** 2)
-        if dist > 1e-4:
-            scale = float(dist)
+        self.interpreter = Interpreter(model_path=model_path, num_threads=num_threads)
+        self.interpreter.allocate_tensors()
 
-    # 2. Pose (33 landmarks = 99 features)
-    pose_vector = [0.0] * 99
-    if pose_lms:
-        for i, lm in enumerate(pose_lms[:33]):
-            pose_vector[i * 3] = (lm.x - mid_x) / scale
-            pose_vector[i * 3 + 1] = (lm.y - mid_y) / scale
-            pose_vector[i * 3 + 2] = (lm.z - mid_z) / scale
+        self.input_details = self.interpreter.get_input_details()[0]
+        self.output_details = self.interpreter.get_output_details()
 
-    # 3. Left Hand & Right Hand (21 landmarks each = 63 + 63 features)
-    raw_left_hand: List[float] = [0.0] * 63
-    left_hand_lms = getattr(result, "left_hand_landmarks", None)
-    if left_hand_lms:
-        coords = []
-        for lm in left_hand_lms[:21]:
-            coords.extend([
-                (lm.x - mid_x) / scale,
-                (lm.y - mid_y) / scale,
-                (lm.z - mid_z) / scale,
-            ])
-        if len(coords) == 63:
-            raw_left_hand = coords
+        shape = self.input_details["shape"]
+        self.in_h, self.in_w = int(shape[1]), int(shape[2])
+        self.in_dtype = self.input_details["dtype"]
 
-    raw_right_hand: List[float] = [0.0] * 63
-    right_hand_lms = getattr(result, "right_hand_landmarks", None)
-    if right_hand_lms:
-        coords = []
-        for lm in right_hand_lms[:21]:
-            coords.extend([
-                (lm.x - mid_x) / scale,
-                (lm.y - mid_y) / scale,
-                (lm.z - mid_z) / scale,
-            ])
-        if len(coords) == 63:
-            raw_right_hand = coords
+    def run(self, rgb_crop: np.ndarray) -> list[np.ndarray]:
+        src_h, src_w, _ = rgb_crop.shape
+        if (src_h, src_w) != (self.in_h, self.in_w):
+            # Fast bilinear resize using NumPy grid
+            y = np.linspace(0, src_h - 1, self.in_h)
+            x = np.linspace(0, src_w - 1, self.in_w)
+            xf = np.floor(x).astype(int)
+            yf = np.floor(y).astype(int)
+            xc = np.minimum(xf + 1, src_w - 1)
+            yc = np.minimum(yf + 1, src_h - 1)
 
-    # When camera feed is mirrored (flip_horizontal=True), MediaPipe's Left hand
-    # corresponds to the user's physical Right hand, and Right to physical Left.
-    if flip_horizontal:
-        left_hand_vector = raw_right_hand
-        right_hand_vector = raw_left_hand
-    else:
-        left_hand_vector = raw_left_hand
-        right_hand_vector = raw_right_hand
+            wa = ((xc - x) * (yc - y)[:, None])[:, :, None]
+            wb = ((x - xf) * (yc - y)[:, None])[:, :, None]
+            wc = ((xc - x) * (y - yf)[:, None])[:, :, None]
+            wd = ((x - xf) * (y - yf)[:, None])[:, :, None]
 
-    # 4. Face Keypoints (100 landmarks = 300 features)
-    face_vector = [0.0] * 300
-    face_lms = getattr(result, "face_landmarks", None)
-    if face_lms:
-        num_face_lms = len(face_lms)
-        coords = []
-        for idx in FACE_INDICES:
-            if idx < num_face_lms:
-                lm = face_lms[idx]
-                coords.extend([
-                    (lm.x - mid_x) / scale,
-                    (lm.y - mid_y) / scale,
-                    (lm.z - mid_z) / scale,
-                ])
+            img = (
+                wa * rgb_crop[yf[:, None], xf] +
+                wb * rgb_crop[yf[:, None], xc] +
+                wc * rgb_crop[yc[:, None], xf] +
+                wd * rgb_crop[yc[:, None], xc]
+            ).astype(rgb_crop.dtype)
+        else:
+            img = rgb_crop
+
+        # Normalize pixel values
+        if self.in_dtype == np.float32:
+            tensor = (img.astype(np.float32) / 127.5) - 1.0
+        else:
+            scale, zero_point = self.input_details["quantization"]
+            if scale > 0.0:
+                tensor = np.round((img.astype(np.float32) / 255.0) / scale + zero_point).astype(self.in_dtype)
             else:
-                coords.extend([0.0, 0.0, 0.0])
-        if len(coords) == 300:
-            face_vector = coords
+                tensor = img.astype(self.in_dtype)
 
-    # 5. Full 525-feature vector
-    full_vector = pose_vector + left_hand_vector + right_hand_vector + face_vector
-    return full_vector, pose_vector, left_hand_vector, right_hand_vector, face_vector
+        input_data = np.expand_dims(tensor, axis=0)
+        self.interpreter.set_tensor(self.input_details["index"], input_data)
+        self.interpreter.invoke()
+
+        outputs = []
+        for det in self.output_details:
+            arr = self.interpreter.get_tensor(det["index"])
+            scale, zero_point = det["quantization"]
+            if scale > 0.0:
+                arr = (arr.astype(np.float32) - zero_point) * scale
+            outputs.append(arr)
+        return outputs
 
 
 class HolisticDetector:
     """
-    Wrapper around MediaPipe Tasks HolisticLandmarker using LIVE_STREAM asynchronous mode.
-    Generates 525-dimensional normalized landmark vectors according to FLET_INTEGRATION_SPEC.md.
+    Pure Python Holistic Landmark Extractor using extracted .tflite subgraphs.
+    Produces the exact 525-feature vector required by Stage 11 Inception-Transformer.
     """
 
     def __init__(
         self,
-        model_path: str,
+        base_dir: str,
         HandDisplayView: Optional[VectorView] = None,
-        classifier=None,
-        prediction_callback: Optional[Callable[[str, float], None]] = None,
+        prediction_callback: Optional[Callable[[np.ndarray, bool, bool], None]] = None,
         flip_horizontal: bool = True,
     ) -> None:
         self.hand_display = HandDisplayView
-        self.classifier = classifier
         self.prediction_callback = prediction_callback
         self.flip_horizontal = flip_horizontal
 
-        base_options = python.BaseOptions(model_asset_path=model_path)
-        options = vision.HolisticLandmarkerOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.LIVE_STREAM,
-            result_callback=self._internal_callback,
+        base_path = Path(base_dir).resolve()
+        pose_path = base_path / "pose_landmarker.tflite"
+        hand_path = base_path / "hand_landmarker.tflite"
+        face_path = base_path / "face_landmarker.tflite"
+
+        for p in (pose_path, hand_path, face_path):
+            if not p.exists():
+                raise FileNotFoundError(f"Missing TFLite model at: {p}")
+
+        self.pose_runner = SubModelRunner(str(pose_path))
+        self.hand_runner = SubModelRunner(str(hand_path))
+        self.face_runner = SubModelRunner(str(face_path))
+
+    def process_frame(self, rgb_frame: np.ndarray) -> None:
+        if rgb_frame is None or rgb_frame.size == 0:
+            return
+
+        if rgb_frame.ndim == 3 and rgb_frame.shape[-1] == 4:
+            rgb_frame = rgb_frame[:, :, :3]
+
+        if rgb_frame.dtype != np.uint8:
+            rgb_frame = np.clip(rgb_frame, 0, 255).astype(np.uint8)
+
+        if self.flip_horizontal:
+            rgb_frame = np.fliplr(rgb_frame)
+
+        h, w, _ = rgb_frame.shape
+
+        # =========================================================================
+        # 1. Pose Inference (33 Upper Body Landmarks = 99 dims)
+        # =========================================================================
+        pose_vector = [0.0] * 99
+        pose_outs = self.pose_runner.run(rgb_frame)
+        pose_lms = None
+
+        for out in pose_outs:
+            flat = out.flatten()
+            # pose_landmarks_detector outputs 195 (39x5) or 165 (33x5)
+            if flat.size in (195, 165):
+                raw_lms = flat.reshape(-1, 5)[:33, :3].copy()
+
+                # Scale down if coordinates are in pixel domain (0..256)
+                if np.max(raw_lms[:, :2]) > 1.5:
+                    raw_lms[:, 0] /= float(self.pose_runner.in_w)
+                    raw_lms[:, 1] /= float(self.pose_runner.in_h)
+
+                raw_lms[:, :2] = np.clip(raw_lms[:, :2], 0.0, 1.0)
+                pose_lms = raw_lms
+                pose_vector = raw_lms.flatten().tolist()
+                break
+
+        # =========================================================================
+        # 2. Hand Inference (Dual Hands = 126 dims)
+        # =========================================================================
+        left_hand_vector = [0.0] * 63
+        right_hand_vector = [0.0] * 63
+        hands_present = False
+        is_signing = False
+
+        crops = []
+        # Use pose wrist coordinates (15: Left Wrist, 16: Right Wrist) to create hand crops
+        if pose_lms is not None:
+            for wrist_idx in (15, 16):
+                wx, wy = pose_lms[wrist_idx][0], pose_lms[wrist_idx][1]
+                if 0.01 < wx < 0.99 and 0.01 < wy < 0.99:
+                    cx, cy = int(wx * w), int(wy * h)
+                    box_s = int(min(w, h) * 0.45)
+                    y1, y2 = max(0, cy - box_s // 2), min(h, cy + box_s // 2)
+                    x1, x2 = max(0, cx - box_s // 2), min(w, cx + box_s // 2)
+                    if (y2 - y1) > 20 and (x2 - x1) > 20:
+                        crops.append((rgb_frame[y1:y2, x1:x2], x1 / w, y1 / h, (x2 - x1) / w, (y2 - y1) / h))
+
+        if not crops:
+            crops.append((rgb_frame, 0.0, 0.0, 1.0, 1.0))
+
+        detected_hands = []
+        for crop_img, off_x, off_y, scale_w, scale_h in crops:
+            hand_outs = self.hand_runner.run(crop_img)
+            for out in hand_outs:
+                flat = out.flatten()
+                if flat.size == 63:  # 21 landmarks * 3
+                    hlms = flat.reshape(21, 3).copy()
+
+                    if np.max(hlms[:, :2]) > 1.5:
+                        hlms[:, 0] /= float(self.hand_runner.in_w)
+                        hlms[:, 1] /= float(self.hand_runner.in_h)
+
+                    hlms[:, 0] = hlms[:, 0] * scale_w + off_x
+                    hlms[:, 1] = hlms[:, 1] * scale_h + off_y
+                    hlms[:, :2] = np.clip(hlms[:, :2], 0.0, 1.0)
+
+                    wrist = hlms[0]
+                    if wrist[1] < 0.94:
+                        is_signing = True
+
+                    detected_hands.append((wrist[0], wrist[1], hlms.flatten().tolist()))
+                    break
+
+        if detected_hands:
+            hands_present = True
+            if len(detected_hands) == 1:
+                wx, wy, coords = detected_hands[0]
+                is_right_hand = wx >= 0.50
+                if pose_lms is not None:
+                    l_sh = pose_lms[11]
+                    r_sh = pose_lms[12]
+                    d_left = (wx - l_sh[0]) ** 2 + (wy - l_sh[1]) ** 2
+                    d_right = (wx - r_sh[0]) ** 2 + (wy - r_sh[1]) ** 2
+                    is_right_hand = d_right < d_left
+
+                if is_right_hand:
+                    right_hand_vector = coords
+                else:
+                    left_hand_vector = coords
+            else:
+                sorted_hands = sorted(detected_hands, key=lambda h: h[0])
+                left_hand_vector = sorted_hands[0][2]
+                right_hand_vector = sorted_hands[1][2]
+
+        # =========================================================================
+        # 3. Face Inference (100 Selected Landmarks = 300 dims)
+        # =========================================================================
+        face_vector = [0.0] * 300
+        face_outs = self.face_runner.run(rgb_frame)
+        for out in face_outs:
+            flat = out.flatten()
+            if flat.size >= 1404:  # 468 or 478 landmarks * 3
+                coords = flat.reshape(-1, 3).copy()
+                if np.max(coords[:, :2]) > 1.5:
+                    coords[:, 0] /= float(self.face_runner.in_w)
+                    coords[:, 1] /= float(self.face_runner.in_h)
+
+                coords[:, :2] = np.clip(coords[:, :2], 0.0, 1.0)
+                n_mesh = len(coords)
+                selected = []
+                for idx in FACE_LANDMARKS:
+                    if idx < n_mesh:
+                        selected.extend([coords[idx][0], coords[idx][1], coords[idx][2]])
+                    else:
+                        selected.extend([0.0, 0.0, 0.0])
+                face_vector = selected
+                break
+
+        # =========================================================================
+        # 4. Concatenate Full 525 Vector
+        # =========================================================================
+        frame_vector = np.array(
+            pose_vector + left_hand_vector + right_hand_vector + face_vector,
+            dtype=np.float32,
         )
-        self.landmarker = vision.HolisticLandmarker.create_from_options(options)
 
-    def _internal_callback(
-        self, result, output_image, timestamp_ms: int
-    ) -> None:
-        """Internal callback invoked by MediaPipe Tasks when holistic detection completes."""
-        if self.hand_display or self.classifier:
-            self._on_holistic_detected(result)
+        data.vector = frame_vector.tolist()
+        data.pose_vector = pose_vector
+        data.left_hand_vector = left_hand_vector
+        data.right_hand_vector = right_hand_vector
+        data.face_vector = face_vector
 
-    def process_frame(self, rgb_array: np.ndarray) -> None:
-        """Dispatches an RGB frame asynchronously to the MediaPipe Holistic landmarker."""
-        mp_image = mp.Image(
-            image_format=mp.ImageFormat.SRGB, data=rgb_array
-        )
-        timestamp_ms = int(time.time() * 1000)
-        self.landmarker.detect_async(mp_image, timestamp_ms)
-
-    def close(self) -> None:
-        """Releases C++ resources allocated by MediaPipe Holistic landmarker."""
-        if hasattr(self, "landmarker") and self.landmarker:
-            self.landmarker.close()
-
-    def _on_holistic_detected(self, result) -> None:
-        """
-        Normalizes detected landmarks into the 525-dimensional feature vector,
-        updates data state, invokes classifier inference, and refreshes UI display.
-        """
-        full_vector, pose_vec, left_vec, right_vec, face_vec = extract_and_normalize_holistic(
-            result, flip_horizontal=self.flip_horizontal
-        )
-
-        data.vector = full_vector
-        data.pose_vector = pose_vec
-        data.left_hand_vector = left_vec
-        data.right_hand_vector = right_vec
-        data.face_vector = face_vec
-
-        prediction_info = ""
-        if self.classifier:
-            fn = getattr(self.classifier, "process_holistic_vector", None) or getattr(
-                self.classifier, "process_hand_vector", None
-            )
-            if fn:
-                prediction = fn(full_vector)
-                if prediction:
-                    sign_label, confidence = prediction
-                    data.predicted_sign = sign_label
-                    data.confidence = confidence
-                    prediction_info = f"\n\n🎯 Recognized: {sign_label.upper()} ({confidence * 100:.1f}%)"
-                    if self.prediction_callback:
-                        self.prediction_callback(sign_label, confidence)
-
-        has_pose = any(pose_vec)
-        has_left = any(left_vec)
-        has_right = any(right_vec)
-        has_face = any(face_vec)
-
-        data.formatted_vals = ", ".join(f"{v:.3f}" for v in full_vector[:15]) + "..."
+        if self.prediction_callback:
+            self.prediction_callback(frame_vector, hands_present, is_signing)
 
         if self.hand_display:
+            has_pose = any(pose_vector)
+            has_lh = any(left_hand_vector)
+            has_rh = any(right_hand_vector)
+            has_face = any(face_vector)
             output_text = (
                 f"Pose: {'✓' if has_pose else '✗'} | "
-                f"L-Hand: {'✓' if has_left else '✗'} | "
-                f"R-Hand: {'✓' if has_right else '✗'} | "
-                f"Face: {'✓' if has_face else '✗'} | "
-                f"Dim: {len(full_vector)}"
-                f"{prediction_info}\n\n"
-                f"Sample [0:15]: [{data.formatted_vals}]\n\n"
-                f"Full 525 Vector:\n[{', '.join(f'{v:.3f}' for v in full_vector)}]"
+                f"L-Hand: {'✓' if has_lh else '✗'} | "
+                f"R-Hand: {'✓' if has_rh else '✗'} | "
+                f"Face: {'✓' if has_face else '✗'}\n"
+                f"Hands Present: {hands_present} | Signing: {is_signing}"
             )
             self.hand_display.update_data(output_text)
 
+    def close(self):
+        pass

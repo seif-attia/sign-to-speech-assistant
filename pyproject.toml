@@ -11,6 +11,8 @@ dependencies = [
     "flet-camera>=0.86.4",
     "flet-permission-handler>=0.86.4",
     "mediapipe>=1.0.0",
+    "tensorflow-cpu; sys_platform == 'win32'",
+    "tflite-runtime==2.14.0; sys_platform != 'win32'",
 ]
 
 [dependency-groups]

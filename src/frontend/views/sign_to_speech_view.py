@@ -2,7 +2,6 @@ import asyncio
 from pathlib import Path
 import threading
 import time
-from typing import Optional
 import flet as ft
 import flet_camera as fc
 
@@ -10,36 +9,33 @@ from components.camera_view import CameraView
 from components.vector_view import VectorView
 from services.mobile_processor import MobileFrameProcessor
 from services.holistic_detector import HolisticDetector
-from services.sign_to_text_model import SignToTextClassifier
+from services.sign_to_text_model import SignPredictor
 from frontend.components.bottom_nav_bar import create_nav_bar
 
-# Absolute path resolution for model binaries and assets
 BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
-MODEL_PATH = str(BASE_DIR / "holistic_landmarker.task")
-HOLISTIC_SIGN_MODEL_PATH = BASE_DIR / "sign_language_holistic_model.tflite"
-SIGN_MODEL_PATH = str(
-    HOLISTIC_SIGN_MODEL_PATH
-    if HOLISTIC_SIGN_MODEL_PATH.exists()
-    else (BASE_DIR / "sign_language_model.tflite")
-)
-LABELS_PATH = str(BASE_DIR / "labels.json")
+SIGN_MODEL_PATH = str(BASE_DIR / "sign_language_top30_model.tflite" if (BASE_DIR / "sign_language_top30_model.tflite").exists() else BASE_DIR / "sign_language_holistic_model.tflite")
+LABELS_PATH = str(BASE_DIR / "labels.json" if (BASE_DIR / "labels.json").exists() else BASE_DIR / "label.json")
 
-# Standard layout viewport dimensions for the mobile camera container
 VIEWPORT_WIDTH = 360
 VIEWPORT_HEIGHT = 380
 
 
 class SignToSpeechView(ft.View):
-    """
-    Sign language translation camera view.
-    Displays real-time camera feed, MediaPipe landmark vectors,
-    smooth gesture recognition with voting confidence, and speech synthesis.
-    """
-
-    def __init__(self, page: ft.Page, use_mock: bool = False):
+    def __init__(self, page: ft.Page):
         self.app_page = page
         self.is_speech_enabled: bool = True
         self._last_spoken_time: float = 0.0
+        self._is_active: bool = True
+
+        # State Variables from test script
+        self.sentence_ribbon: list[str] = []
+        self.last_commit_word: str = ""
+        self.last_commit_time: float = 0.0
+        self.last_pred_time: float = 0.0
+
+        self.HOLD_DURATION = 1.2
+        self.COMMIT_THRESHOLD = 0.50
+        self.COMMIT_COOLDOWN = 1.4
 
         async def close(e: ft.ControlEvent):
             await self.cleanup_async()
@@ -58,37 +54,40 @@ class SignToSpeechView(ft.View):
             navigation_bar=create_nav_bar(1, self.app_page),
         )
 
-        # --- UI Components ---
         self.camera_view_component = CameraView(
             width=VIEWPORT_WIDTH,
             height=VIEWPORT_HEIGHT,
             resolution=fc.ResolutionPreset.MEDIUM,
             lens_direction=fc.CameraLensDirection.FRONT,
-            on_lens_change=self._on_camera_flip
+            on_lens_change=self._on_camera_flip,
         )
         self.hand_display = VectorView(width=VIEWPORT_WIDTH - 30)
 
-        # Dedicated UI display elements (avoiding status/prediction clobbering)
         self.gesture_icon = ft.Icon(ft.Icons.FRONT_HAND, color=ft.Colors.BLUE, size=28)
         self.prediction_text = ft.Text(
-            "Waiting for gesture...",
-            size=18,
+            "STANDBY",
+            size=20,
             weight=ft.FontWeight.BOLD,
             color=ft.Colors.BLUE_900,
         )
         self.confidence_text = ft.Text(
-            "Perform sign inside camera frame",
+            "Raise hands in camera view",
             size=12,
             color=ft.Colors.GREY_700,
         )
+        self.sentence_ribbon_text = ft.Text(
+            "SENTENCE: (waiting for signs...)",
+            size=12,
+            weight=ft.FontWeight.W_500,
+            color=ft.Colors.BLUE_GREY_800,
+        )
         self.status_bar_text = ft.Text(
-            "Status: Initializing...",
+            "Status: Ready",
             size=11,
             color=ft.Colors.GREY_600,
             italic=True,
         )
 
-        # TTS Speech Toggle Button
         self.speech_button = ft.IconButton(
             icon=ft.Icons.VOLUME_UP,
             icon_color=ft.Colors.BLUE_700,
@@ -96,22 +95,6 @@ class SignToSpeechView(ft.View):
             on_click=self._toggle_speech,
         )
 
-        # Mock Mode indicator badge
-        self.mock_badge = ft.Container(
-            content=ft.Text(
-                "MOCK MODE",
-                size=9,
-                weight=ft.FontWeight.BOLD,
-                color=ft.Colors.ORANGE_900,
-            ),
-            bgcolor=ft.Colors.ORANGE_100,
-            border=ft.Border.all(1, ft.Colors.ORANGE_300),
-            border_radius=4,
-            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
-            visible=False,
-        )
-
-        # Unified recognition feedback card
         self.prediction_card = ft.Container(
             content=ft.Column(
                 controls=[
@@ -120,15 +103,7 @@ class SignToSpeechView(ft.View):
                             self.gesture_icon,
                             ft.Column(
                                 controls=[
-                                    ft.Row(
-                                        controls=[
-                                            self.prediction_text,
-                                            self.mock_badge,
-                                        ],
-                                        alignment=ft.MainAxisAlignment.START,
-                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                        spacing=6,
-                                    ),
+                                    self.prediction_text,
                                     self.confidence_text,
                                 ],
                                 spacing=2,
@@ -140,6 +115,7 @@ class SignToSpeechView(ft.View):
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Divider(height=1, color=ft.Colors.BLUE_100),
+                    self.sentence_ribbon_text,
                     ft.Row(
                         controls=[
                             ft.Icon(ft.Icons.INFO_OUTLINE, size=14, color=ft.Colors.GREY_500),
@@ -156,30 +132,15 @@ class SignToSpeechView(ft.View):
             width=VIEWPORT_WIDTH,
         )
 
-        # --- ML Inference Service ---
-        self.classifier = SignToTextClassifier(
+        # Initialize Predictor and 3-Task Detector
+        self.predictor = SignPredictor(
             model_path=SIGN_MODEL_PATH,
             labels_path=LABELS_PATH,
-            threshold=0.50,
-            voting_window_size=5,
-            min_voting_count=3,
-            cooldown_seconds=1.5,
-            max_missing_frames=5,
-            use_mock=use_mock,
-            on_prediction=self._on_sign_recognized,
-            on_status=self._on_status_update,
         )
-
-        # Display mock badge if mock runtime was activated
-        if self.classifier.is_mock:
-            self.mock_badge.visible = True
-            self.status_bar_text.value = "Status: Mock predictor active"
-
-        # --- Hardware Capture & Detection Services ---
         self.detector = HolisticDetector(
-            model_path=MODEL_PATH,
+            base_dir=str(BASE_DIR),
             HandDisplayView=self.hand_display,
-            classifier=self.classifier,
+            prediction_callback=self._on_frame_detected,
             flip_horizontal=True,
         )
         self.processor = MobileFrameProcessor(
@@ -201,64 +162,111 @@ class SignToSpeechView(ft.View):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.START,
                 expand=True,
-                scroll= ft.ScrollMode.ALWAYS
+                scroll=ft.ScrollMode.ALWAYS,
             )
         ]
 
         self.processor.start()
 
     def _safe_update(self, control: ft.Control) -> None:
-        """Thread-safe UI control update with lifecycle exception protection."""
-        try:
-            if self.app_page:
-                control.update()
-        except Exception:
-            pass
+        if not self._is_active:
+            return
 
-    def _on_sign_recognized(self, label: str, confidence: float) -> None:
-        """
-        Callback invoked when a gesture passes temporal voting & cooldown.
-        Updates UI and triggers speech synthesis without being wiped by status events.
-        """
-        self.prediction_text.value = f"🎯 {label.upper()}"
-        self.prediction_text.color = ft.Colors.GREEN_800
-        self.confidence_text.value = (
-            f"Confidence: {confidence * 100:.1f}% (Voting Verified)"
-        )
-        self.status_bar_text.value = f"Recognized '{label}' • Ready for next sign"
+        def _update():
+            try:
+                if self.app_page:
+                    control.update()
+            except Exception:
+                pass
 
-        self._safe_update(self.prediction_card)
+        if threading.current_thread() is threading.main_thread():
+            _update()
+        else:
+            self.app_page.run_thread(_update)
 
-        # Trigger Speech Output
-        self._speak_text(label)
+    def _on_frame_detected(self, frame_vector, hands_present: bool, is_signing: bool) -> None:
+        if not self._is_active:
+            return
 
-    def _on_status_update(self, status_msg: str) -> None:
-        """
-        Callback invoked during buffering or hand tracking state changes.
-        Updates the dedicated status bar without wiping out recognized predictions.
-        """
-        self.status_bar_text.value = status_msg
+        res = self.predictor.process_frame(frame_vector, hands_present, is_signing)
+        status = res.get("status")
 
-        # Only reset top label if no gesture has ever been recognized yet
-        if self.prediction_text.value == "Waiting for gesture...":
-            self.confidence_text.value = status_msg
+        if status == "WARMING":
+            fill = res["buffer_fill"]
+            tot = res["total_buffer"]
+            self.prediction_text.value = f"WARMING [{fill}/{tot}]"
+            self.prediction_text.color = ft.Colors.ORANGE_800
+            self.confidence_text.value = "Buffer filling... raise hands and sign"
+            self._safe_update(self.prediction_card)
+            return
 
-        self._safe_update(self.prediction_card)
+        elif status == "NO_HANDS":
+            # Keep displaying last detected sign for HOLD_DURATION seconds
+            hold_active = (time.perf_counter() - self.last_pred_time) < self.HOLD_DURATION
+            if not hold_active:
+                self.prediction_text.value = "STANDBY"
+                self.prediction_text.color = ft.Colors.BLUE_900
+                self.confidence_text.value = "Raise hands into camera view"
+                self._safe_update(self.prediction_card)
+            return
+
+        elif status == "RESTING":
+            hold_active = (time.perf_counter() - self.last_pred_time) < self.HOLD_DURATION
+            if not hold_active:
+                self.prediction_text.value = "RESTING"
+                self.prediction_text.color = ft.Colors.BLUE_700
+                self.confidence_text.value = "Lift hands into signing space"
+                self._safe_update(self.prediction_card)
+            return
+
+        elif status == "PREDICTION":
+            word = res["word"]
+            conf = res["conf"]
+            top5 = res["top5"]
+            now_ts = time.perf_counter()
+
+            self.last_pred_time = now_ts
+            self.prediction_text.value = f"🎯 {word.upper()}"
+            self.prediction_text.color = ft.Colors.GREEN_800 if conf >= 0.50 else ft.Colors.CYAN_900
+            self.confidence_text.value = f"Confidence: {conf * 100:.1f}%"
+
+            # Top candidate diagnostics
+            if len(top5) > 1:
+                alt = " | ".join([f"{w} ({c * 100:.0f}%)" for w, c in top5[1:4]])
+                self.status_bar_text.value = f"Top: {alt}"
+
+            # --- Anti-Duplication & Sentence Ribbon Commitment ---
+            # 1. Meets confidence threshold (no need to wait for 90%)
+            # 2. Cooldown elapsed since last word commit
+            # 3. Not identical to the immediately preceding committed word
+            is_new_word = len(self.sentence_ribbon) == 0 or self.sentence_ribbon[-1] != word
+            cooldown_passed = (now_ts - self.last_commit_time) > self.COMMIT_COOLDOWN
+
+            if conf >= self.COMMIT_THRESHOLD and is_new_word and cooldown_passed:
+                self.sentence_ribbon.append(word)
+                if len(self.sentence_ribbon) > 8:
+                    self.sentence_ribbon = self.sentence_ribbon[-8:]
+
+                self.last_commit_word = word
+                self.last_commit_time = now_ts
+
+                # Update UI ribbon & synthesize speech
+                self.sentence_ribbon_text.value = f"SENTENCE: {' '.join(self.sentence_ribbon)}"
+                self._speak_text(word)
+
+                # Reset buffer so the tail of the current stroke doesn't re-trigger
+                self.predictor.clear()
+
+            self._safe_update(self.prediction_card)
 
     def _toggle_speech(self, e: ft.ControlEvent) -> None:
-        """Toggles Text-To-Speech audio feedback on or off."""
         self.is_speech_enabled = not self.is_speech_enabled
-        self.speech_button.icon = (
-            ft.Icons.VOLUME_UP if self.is_speech_enabled else ft.Icons.VOLUME_OFF
-        )
-        self.speech_button.icon_color = (
-            ft.Colors.BLUE_700 if self.is_speech_enabled else ft.Colors.GREY_500
-        )
+        self.speech_button.icon = ft.Icons.VOLUME_UP if self.is_speech_enabled else ft.Icons.VOLUME_OFF
+        self.speech_button.icon_color = ft.Colors.BLUE_700 if self.is_speech_enabled else ft.Colors.GREY_500
         self._safe_update(self.speech_button)
 
     def _speak_text(self, text: str) -> None:
-        """Asynchronously synthesizes speech for the recognized sign label."""
-        if not self.is_speech_enabled:
+        if not self.is_speech_enabled or not self._is_active:
             return
 
         now = time.time()
@@ -266,28 +274,29 @@ class SignToSpeechView(ft.View):
             return
         self._last_spoken_time = now
 
-        def _tts_thread():
+        def _tts():
             try:
                 import pyttsx3
                 engine = pyttsx3.init()
                 engine.say(text)
                 engine.runAndWait()
             except Exception:
-                # Fallback if pyttsx3 or audio drivers are not configured
                 pass
 
-        threading.Thread(target=_tts_thread, daemon=True).start()
+        threading.Thread(target=_tts, daemon=True).start()
 
     async def cleanup_async(self):
-        """Releases all camera, hardware, and classification handles on view teardown."""
-        if self.processor:
+        self._is_active = False
+        if hasattr(self, "processor") and self.processor:
             self.processor.stop()
-        if self.detector:
+        if hasattr(self, "detector") and self.detector:
             self.detector.close()
-        if self.classifier:
-            self.classifier.close()
+        if hasattr(self, "predictor") and self.predictor:
+            self.predictor.clear()
 
     def _on_camera_flip(self, new_direction: fc.CameraLensDirection):
-        is_front = (new_direction == fc.CameraLensDirection.FRONT)
-        self.processor.flip_horizontal = is_front
-        self.detector.flip_horizontal = is_front
+        is_front = new_direction == fc.CameraLensDirection.FRONT
+        if hasattr(self, "processor") and self.processor:
+            self.processor.flip_horizontal = is_front
+        if hasattr(self, "detector") and self.detector:
+            self.detector.flip_horizontal = is_front
