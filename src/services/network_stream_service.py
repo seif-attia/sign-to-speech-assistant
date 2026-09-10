@@ -58,8 +58,8 @@ class NetworkSignStreamer:
         finally:
             self._loop.close()
 
-    def queue_frame(self, frame_bytes: bytes, is_front: bool = True, rotate: int = 0):
-        """Enqueues latest frame as Base64 string or JSON payload."""
+    def queue_frame(self, frame_bytes: bytes, is_front: bool = True, rotate: int = 0, target_lang: str = "en"):
+        """Enqueues latest frame as Base64 string or JSON payload with target translation language."""
         if not self.is_running or not frame_bytes:
             return
         b64 = base64.b64encode(frame_bytes).decode("utf-8")
@@ -67,6 +67,7 @@ class NetworkSignStreamer:
             "frame": b64,
             "flip": is_front,
             "rotate": rotate,
+            "target_lang": target_lang,
         })
         with self._lock:
             self._latest_payload = payload

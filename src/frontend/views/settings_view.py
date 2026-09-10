@@ -94,9 +94,50 @@ class SettingsView(ft.View):
                 width=VIEWPORT_WIDTH,
             )
 
-        row_language = build_settings_row(
-            "Language Preferences",
-            ft.Icon(ft.Icons.CHEVRON_RIGHT, color=TEXT_MUTED, size=20),
+        def _open_lang_dialog(e):
+            def set_lang(chosen):
+                dialog.open = False
+                self.app_page.update()
+
+            dialog = ft.AlertDialog(
+                title=ft.Text("Language Preferences"),
+                content=ft.Column(
+                    controls=[
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.LANGUAGE, color=ACCENT_MINT),
+                            title=ft.Text("English (US)"),
+                            subtitle=ft.Text("Piper VITS Neural TTS"),
+                            on_click=lambda ev: set_lang("en"),
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.LANGUAGE, color=ACCENT_MINT),
+                            title=ft.Text("العربية (Arabic)"),
+                            subtitle=ft.Text("Nabra Kokoro Neural TTS"),
+                            on_click=lambda ev: set_lang("ar"),
+                        ),
+                    ],
+                    tight=True,
+                ),
+            )
+            self.app_page.overlay.append(dialog)
+            dialog.open = True
+            self.app_page.update()
+
+        row_language = ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Text("Language Preferences (English / العربية)", size=14, color=TEXT_PRIMARY, weight=ft.FontWeight.W_500),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT, color=TEXT_MUTED, size=20),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            padding=ft.Padding.symmetric(vertical=14, horizontal=16),
+            bgcolor=CARD_BG,
+            border_radius=14,
+            border=ft.Border.all(1, CARD_BORDER),
+            width=VIEWPORT_WIDTH,
+            on_click=_open_lang_dialog,
+            ink=True,
         )
         row_help = build_settings_row(
             "Help & Feedback",

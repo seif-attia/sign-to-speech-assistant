@@ -4,9 +4,10 @@ import logging
 import os
 import threading
 import time
-from PIL import Image, ImageOps
 import flet as ft
 import flet_camera as fc
+import flet_audio as fa
+
 
 from components.camera_view import CameraView
 from components.vector_view import VectorView
@@ -57,6 +58,7 @@ class SignToSpeechView(ft.View):
         self.last_commit_word: str = ""
         self.last_pred_time: float = 0.0
         self.HOLD_DURATION = 1.2
+        self.target_lang: str = "en"  # "en" or "ar"
 
         # Speech Synthesis State
         self.is_speech_enabled: bool = True
@@ -64,11 +66,18 @@ class SignToSpeechView(ft.View):
         self._last_spoken_sentence: str = ""
         self._last_spoken_time: float = 0.0
 
+        self.tts_player = fa.Audio(autoplay=False, volume=1.0)
+        if hasattr(self.app_page, "services") and self.tts_player not in self.app_page.services:
+            self.app_page.services.append(self.tts_player)
+        elif self.tts_player not in self.app_page.overlay:
+            self.app_page.overlay.append(self.tts_player)
+        self.app_page.update()
+
         async def close(e: ft.ControlEvent):
             await self.cleanup_async()
             await self.app_page.push_route("/")
 
-        # Top Bar: Left '← Modes', Right: Server IP dialog + Front Cam toggle
+        # Top Bar: Left '← Modes', Right: Language Dropdown + Server IP dialog + Front Cam toggle
         left_modes_btn = ft.Container(
             content=ft.Row(
                 controls=[
@@ -81,6 +90,27 @@ class SignToSpeechView(ft.View):
             padding=ft.Padding.symmetric(horizontal=8, vertical=6),
             border_radius=8,
             bgcolor="#132323",
+        )
+
+        def _on_lang_dropdown_change(e):
+            self.target_lang = self.lang_dropdown.value
+            logger.info(f"Sign to speech target language set to: {self.target_lang}")
+
+        self.lang_dropdown = ft.Dropdown(
+        value="en",
+        options=[
+            ft.dropdown.Option("en", "English"),
+            ft.dropdown.Option("ar", "العربية"),
+        ],
+        on_select=_on_lang_dropdown_change,
+        width=105,
+        # Changed from ft.Padding.symmetric to lowercase ft.padding.symmetric
+        content_padding=ft.Padding.symmetric(horizontal=6, vertical=2), 
+        text_size=12,
+        border_radius=8,
+        border_color=CARD_BORDER,
+        bgcolor="#132323",
+        color=ACCENT_MINT,
         )
 
         server_ip_btn = ft.IconButton(
@@ -111,10 +141,11 @@ class SignToSpeechView(ft.View):
                 left_modes_btn,
                 ft.Row(
                     controls=[
+                        self.lang_dropdown,
                         server_ip_btn,
                         self.front_cam_btn,
                     ],
-                    spacing=6,
+                    spacing=4,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -327,10 +358,21 @@ class SignToSpeechView(ft.View):
 
     def _process_and_compress_frame(self, raw_input) -> bytes:
         try:
+            # If PIL is available, use it for optimal downsampling & EXIF orientation
+            try:
+                from PIL import Image, ImageOps
+                _has_pil = True
+            except ImportError:
+                _has_pil = False
+
             if isinstance(raw_input, (bytes, bytearray)):
-                img_io = io.BytesIO(raw_input)
-                img = Image.open(img_io)
+                if not _has_pil:
+                    return bytes(raw_input)
+                img = Image.open(io.BytesIO(raw_input))
             elif isinstance(raw_input, str) and os.path.exists(raw_input):
+                if not _has_pil:
+                    with open(raw_input, "rb") as f:
+                        return f.read()
                 img = Image.open(raw_input)
             else:
                 return b""
@@ -349,6 +391,14 @@ class SignToSpeechView(ft.View):
                 return buffer.getvalue()
         except Exception as e:
             print(f"[FRAME COMPRESS ERROR] {e}", flush=True)
+            if isinstance(raw_input, (bytes, bytearray)):
+                return bytes(raw_input)
+            elif isinstance(raw_input, str) and os.path.exists(raw_input):
+                try:
+                    with open(raw_input, "rb") as f:
+                        return f.read()
+                except Exception:
+                    pass
             return b""
         finally:
             if isinstance(raw_input, str):
@@ -402,6 +452,7 @@ class SignToSpeechView(ft.View):
                                 frame_bytes,
                                 is_front=False,
                                 rotate=0,
+                                target_lang=self.target_lang,
                             )
                             now_diag = time.perf_counter()
                             if now_diag - last_diag_time >= 1.0:
@@ -445,16 +496,14 @@ class SignToSpeechView(ft.View):
             return
         self._last_spoken_time = now
 
-        def _tts():
+        async def _speak():
             try:
-                import pyttsx3
-                engine = pyttsx3.init()
-                engine.say(text)
-                engine.runAndWait()
-            except Exception:
-                pass
+                from services.fastapi_endpoint import play_speech
+                await play_speech(self.app_page, text, lang=self.target_lang)
+            except Exception as e:
+                logger.error(f"Error during speech playback: {e}")
 
-        threading.Thread(target=_tts, daemon=True).start()
+        self.app_page.run_task(_speak)
 
     def _toggle_speech(self, e: ft.ControlEvent) -> None:
         self.is_speech_enabled = not self.is_speech_enabled
@@ -503,12 +552,39 @@ class SignToSpeechView(ft.View):
 
         self._safe_update(self.prediction_card)
 
+    def _speak_text(self, text: str) -> None:
+        if not self.is_speech_enabled or not self._is_active or not text:
+            return
+
+        now = time.time()
+        if (now - self._last_spoken_time) < 1.0:
+            return
+        self._last_spoken_time = now
+
+        async def _speak():
+            try:
+                from services.fastapi_endpoint import play_speech
+                await play_speech(self.app_page, text, lang=self.target_lang)
+            except Exception as e:
+                logger.error(f"Error during speech playback: {e}")
+
+        self.app_page.run_task(_speak)
+
     async def cleanup_async(self):
         self._is_active = False
         if hasattr(self, "_capture_task") and self._capture_task:
             self._capture_task.cancel()
         if hasattr(self, "streamer") and self.streamer:
             self.streamer.stop()
+        if hasattr(self, "tts_player"):
+            try:
+                if hasattr(self.app_page, "services") and self.tts_player in self.app_page.services:
+                    self.app_page.services.remove(self.tts_player)
+                elif self.tts_player in self.app_page.overlay:
+                    self.app_page.overlay.remove(self.tts_player)
+                self.app_page.update()
+            except Exception:
+                pass
 
     def _on_camera_flip(self, new_direction: fc.CameraLensDirection):
         self.is_front_camera = (new_direction == fc.CameraLensDirection.FRONT)

@@ -12,8 +12,9 @@ dependencies = [
     "websockets",
     "requests",
     "flet-audio",
-    "flet-audio-recorder",
-    "pyttsx3>=2.99",
+    "sherpa-onnx>=1.13.7",
+    "flet-audio-recorder>=0.86.4",
+    "pillow>=12.3.0",
 ]
 
 [dependency-groups]
@@ -39,3 +40,10 @@ copyright = "Copyright (C) 2023-2026 by Flet"
 permission = ["camera", "microphone"]
 [tool.flet.app]
 path = "src"
+
+[tool.flet.android.permission]
+"android.permission.RECORD_AUDIO" = true
+"android.permission.MODIFY_AUDIO_SETTINGS" = true
+
+[tool.flet.android]
+uses_cleartext_traffic = true

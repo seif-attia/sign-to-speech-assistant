@@ -108,7 +108,12 @@ class EducationalView(ft.View):
             {"ar": "مع السلامة", "en": "Goodbye"},
         ]
 
+        from services.fastapi_endpoint import play_speech
+
         def build_phrase_card(ar: str, en: str):
+            def _on_card_click(e):
+                self.app_page.run_task(play_speech, self.app_page, ar, "ar")
+
             return ft.Container(
                 content=ft.Column(
                     controls=[
@@ -126,6 +131,8 @@ class EducationalView(ft.View):
                 border_radius=16,
                 alignment=ft.Alignment.CENTER,
                 ink=True,
+                tooltip="Tap to speak in Arabic",
+                on_click=_on_card_click,
             )
 
         grid_row_1 = ft.Row(

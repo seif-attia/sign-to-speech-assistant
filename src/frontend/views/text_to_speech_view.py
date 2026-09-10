@@ -9,6 +9,7 @@ from frontend.theme import (
     TEXT_SECONDARY,
     TEXT_MUTED,
     INPUT_BG,
+    BADGE_BG,
     create_glass_card,
     create_header,
     create_lang_toggle,
@@ -16,16 +17,18 @@ from frontend.theme import (
     VIEWPORT_WIDTH,
 )
 from frontend.components.bottom_nav_bar import create_nav_bar
-import threading
+from services.fastapi_endpoint import play_speech
 
 class TextToSpeechView(ft.View):
     """
     Screen 7: Text-to-Speech View.
-    Allows typing phrase, synthesizer engagement graphic, and 'Generate & Speak' button.
+    Allows typing phrase, selecting English/Arabic voice, synthesizer engagement graphic,
+    and 'Generate & Speak' button wired directly to Sherpa-ONNX backend.
     """
 
     def __init__(self, page: ft.Page):
         self.app_page = page
+        self.selected_lang = "ar"  # Default Arabic or English
 
         async def go_back(e):
             await self.app_page.push_route("/")
@@ -39,14 +42,41 @@ class TextToSpeechView(ft.View):
             navigation_bar=create_nav_bar(0, self.app_page),
         )
 
+        def _toggle_lang(e):
+            self.selected_lang = "en" if self.selected_lang == "ar" else "ar"
+            self.lang_btn_text.value = "Voice: Arabic" if self.selected_lang == "ar" else "Voice: English"
+            if self.selected_lang == "ar":
+                self.text_input.value = "مرحباً بكم في تطبيق لغة الإشارة"
+                self.text_input.text_align = ft.TextAlign.RIGHT
+            else:
+                self.text_input.value = "Welcome to the Sign Language Assistant"
+                self.text_input.text_align = ft.TextAlign.LEFT
+            self.app_page.update()
+
+        self.lang_btn_text = ft.Text("Voice: Arabic", size=11, weight=ft.FontWeight.BOLD, color=ACCENT_MINT)
+        lang_toggle_btn = ft.Container(
+            content=self.lang_btn_text,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+            border_radius=12,
+            bgcolor="#132B26",
+            border=ft.Border.all(1, "#1D473F"),
+            on_click=_toggle_lang,
+        )
+
         header = create_header(
             title="Text to Speech",
             on_back=go_back,
-            right_control=create_lang_toggle("Ar ⇄ En"),
+            right_control=lang_toggle_btn,
         )
 
         # Synthesizer Engaged Visual
-        synth_badge = create_pill_badge("SYNTHESIZER ENGAGED", font_size=10)
+        self.synth_badge_text = ft.Text("SHERPA-ONNX READY", size=10, weight=ft.FontWeight.BOLD, color=ACCENT_MINT)
+        self.synth_badge = ft.Container(
+            content=ft.Row(controls=[self.synth_badge_text], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+            bgcolor=BADGE_BG,
+            border_radius=12,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+        )
         speaker_icon_circle = ft.Container(
             content=ft.Icon(ft.Icons.VOLUME_UP_ROUNDED, size=40, color=ACCENT_MINT),
             width=80,
@@ -61,7 +91,7 @@ class TextToSpeechView(ft.View):
             content=ft.Column(
                 controls=[
                     speaker_icon_circle,
-                    synth_badge,
+                    self.synth_badge,
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
@@ -73,22 +103,22 @@ class TextToSpeechView(ft.View):
 
         # Input Card
         self.text_input = ft.TextField(
-            value="مرحباً",
+            value="مرحباً بكم في تطبيق لغة الإشارة",
             hint_text="Type text to speak...",
             hint_style=ft.TextStyle(color=TEXT_MUTED, size=15),
-            text_style=ft.TextStyle(color=TEXT_PRIMARY, size=18, weight=ft.FontWeight.BOLD),
+            text_style=ft.TextStyle(color=TEXT_PRIMARY, size=16, weight=ft.FontWeight.BOLD),
             border=ft.InputBorder.NONE,
             multiline=True,
             min_lines=3,
             max_lines=6,
             content_padding=12,
-            text_align=ft.TextAlign.CENTER,
+            text_align=ft.TextAlign.RIGHT,
         )
 
         input_box_card = create_glass_card(
             content=ft.Column(
                 controls=[
-                    ft.Text("ENTER TRANSLATION TEXT", size=10, weight=ft.FontWeight.BOLD, color=TEXT_SECONDARY),
+                    ft.Text("ENTER TEXT TO SYNTHESIZE", size=10, weight=ft.FontWeight.BOLD, color=TEXT_SECONDARY),
                     self.text_input,
                 ],
                 spacing=8,
@@ -99,19 +129,21 @@ class TextToSpeechView(ft.View):
         )
 
         # Action Button: > Generate & Speak
+        async def _do_speak(val: str):
+            self.synth_badge_text.value = "SYNTHESIZING..."
+            self.app_page.update()
+            try:
+                await play_speech(self.app_page, val, lang=self.selected_lang)
+            except Exception:
+                pass
+            self.synth_badge_text.value = "SHERPA-ONNX READY"
+            self.app_page.update()
+
         def on_generate_and_speak(e):
             val = self.text_input.value.strip()
             if not val:
                 return
-            def _tts():
-                try:
-                    import pyttsx3
-                    eng = pyttsx3.init()
-                    eng.say(val)
-                    eng.runAndWait()
-                except Exception:
-                    pass
-            threading.Thread(target=_tts, daemon=True).start()
+            self.app_page.run_task(_do_speak, val)
 
         generate_btn = ft.Container(
             content=ft.ElevatedButton(
