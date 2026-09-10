@@ -45,6 +45,8 @@ class CameraView(ft.Column):
             border_radius=8,
         )
 
+        self.is_camera_ready: bool = False
+
         # Status Label displaying initialization steps or permission errors
         self.status_text: ft.Text = ft.Text(
             value="Initializing camera....", color=ft.Colors.GREY_400
@@ -63,11 +65,18 @@ class CameraView(ft.Column):
 
     async def _setup_camera(self) -> None:
         """Asynchronously requests camera permissions and initializes selected camera lens."""
+        self.is_camera_ready = False
+        print("[CAMERA SETUP] Requesting OS camera permission...", flush=True)
 
         # Request OS camera permission
-        has_permission: fh.PermissionStatus | None = (
-            await self.permission_handler.request(fh.Permission.CAMERA)
-        )
+        try:
+            has_permission: fh.PermissionStatus | None = (
+                await self.permission_handler.request(fh.Permission.CAMERA)
+            )
+            print(f"[CAMERA SETUP] Camera permission response: {has_permission}", flush=True)
+        except Exception as e:
+            print(f"[CAMERA SETUP] Permission handler error: {e}", flush=True)
+            has_permission = None
 
         if not has_permission:
             self.status_text.value = "Camera permission denied"
@@ -77,10 +86,18 @@ class CameraView(ft.Column):
 
         self.status_text.value = "Checking available cameras..."
         self.update()
-        self.available_cameras: list[fc.CameraDescription] = (
-            await self.camera.get_available_cameras()
-        )
+        try:
+            self.available_cameras = await self.camera.get_available_cameras()
+            print(f"[CAMERA SETUP] Available cameras discovered: {len(self.available_cameras)}", flush=True)
+        except Exception as e:
+            print(f"[CAMERA SETUP] Camera detection error: {e}", flush=True)
+            self.status_text.value = f"Camera detection failed: {e}"
+            self.status_text.color = ft.Colors.RED
+            self.update()
+            return
+
         if not self.available_cameras:
+            print("[CAMERA SETUP] No camera detected on this device!", flush=True)
             self.status_text.value = "No camera detected on this device"
             self.status_text.color = ft.Colors.RED
             self.update()
@@ -93,20 +110,25 @@ class CameraView(ft.Column):
                 target_indx: int = idx
                 break
         try:
-            self.status_text.value = "Initiliazing camera..."
+            self.status_text.value = "Initializing camera..."
             self.update()
+            print(f"[CAMERA SETUP] Initializing camera {target_indx} ({self.available_cameras[target_indx]})...", flush=True)
             await self.camera.initialize(
                 description=self.available_cameras[target_indx],
                 resolution_preset=self.camera_resolution,
             )
 
+            self.is_camera_ready = True
             self.status_text.value = "Camera ready."
             self.status_text.color = ft.Colors.GREEN_500
             self.update()
+            print("[CAMERA SETUP] Camera ready!", flush=True)
         except Exception as err:
-            self.status_text.value = f"Initilization Error: {err}"
+            self.is_camera_ready = False
+            self.status_text.value = f"Initialization Error: {err}"
             self.status_text.color = ft.Colors.RED
             self.update()
+            print(f"[CAMERA SETUP ERROR] {err}", flush=True)
 
     async def flip_camera(self, e=None):
 
@@ -119,6 +141,7 @@ class CameraView(ft.Column):
 
 
         self.camera_flip_btn.disabled = True
+        self.is_camera_ready = False
         self.status_text.value = "Switching Camera..."
         self.status_text.color = ft.Colors.BLUE_700 
         self.update()
@@ -126,11 +149,14 @@ class CameraView(ft.Column):
         try:
             await self.camera.set_description(target_cam)
             self.camera_lens_direction = target_direction
-            self.on_lens_change(target_direction)
-            self.status_text.value = "Camera Ready."
+            if self.on_lens_change:
+                self.on_lens_change(target_direction)
+            self.is_camera_ready = True
+            self.status_text.value = "Camera ready."
             self.status_text.color = ft.Colors.GREEN_500
-        except:
-            self.status_text.value = "Couldn't switch cameras"
+        except Exception as err:
+            self.is_camera_ready = False
+            self.status_text.value = f"Couldn't switch cameras: {err}"
             self.status_text.color = ft.Colors.RED
         finally:
             self.camera_flip_btn.disabled = False

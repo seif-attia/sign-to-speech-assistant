@@ -1,8 +1,7 @@
 import asyncio
 import httpx
+from services.config import get_server_base_url
 
-# Replace with your PC's local Wi-Fi IP (e.g., "http://192.168.1.15:8000")
-SERVER_BASE_URL = "http://192.168.1.X:8000"
 
 # ========================================================
 #            THE 2 ABSTRACTED CLIENT FUNCTIONS
@@ -10,17 +9,19 @@ SERVER_BASE_URL = "http://192.168.1.X:8000"
 
 async def send_prompt(prompt_text: str) -> str:
     """Sends the gloss prompt to the server and returns a job_id string."""
+    base_url = get_server_base_url()
     async with httpx.AsyncClient(timeout=10.0) as client:
         res = await client.post(
-            f"{SERVER_BASE_URL}/send_prompt", json={"prompt": prompt_text}
+            f"{base_url}/send_prompt", json={"prompt": prompt_text}
         )
         return res.json()["job_id"]
 
 
 async def get_response(job_id: str) -> dict:
     """Polls the server for job status. Returns dict with status and response."""
+    base_url = get_server_base_url()
     async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.get(f"{SERVER_BASE_URL}/get_response/{job_id}")
+        res = await client.get(f"{base_url}/get_response/{job_id}")
         return res.json()
 
 

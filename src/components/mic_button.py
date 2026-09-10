@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import Callable, Optional
 import flet as ft
 import flet_permission_handler as fh
@@ -12,8 +13,7 @@ logger = logging.getLogger(__name__)
 class MicButton(ft.Column):
     """
     Reusable Microphone Button component.
-    Toggles audio recording, streams raw 16-bit PCM bytes into global data.py,
-    and visually indicates active (red) vs inactive (grey/black) state.
+    Toggles audio recording, outputs WAV bytes, and updates UI on active/inactive states.
     """
 
     def __init__(
@@ -31,11 +31,12 @@ class MicButton(ft.Column):
         self.alignment = ft.MainAxisAlignment.CENTER
         self.spacing = 16
 
-        # Permission handler
+        # Permission & Audio Service
         self.permission_handler = fh.PermissionHandler()
-
-        # Audio service
         self.recorder = AudioRecorderService(on_data=self._on_audio_data)
+
+        self._timer_task: Optional[asyncio.Task] = None
+        self._record_start_time: float = 0.0
 
         # Reactive controls
         self.mic_icon_button = ft.IconButton(
@@ -81,16 +82,24 @@ class MicButton(ft.Column):
             ),
         ]
 
+    def did_mount(self):
+        """Called by Flet when control is attached to page."""
+        if self.page:
+            self.recorder.attach_to_page(self.page)
+
     def _on_audio_data(self, chunk: bytes) -> None:
-        """Callback from recorder thread on each audio chunk."""
-        # Update text if still mounted and recording
-        if self.page and self.recorder.is_recording:
-            count = self.recorder.recorded_bytes_count
-            self.info_text.value = f"Captured {count:,} bytes"
+        pass
+
+    async def _update_timer_loop(self):
+        """Live seconds ticker while active."""
+        while self.recorder.is_recording:
+            elapsed = int(time.time() - self._record_start_time)
+            self.info_text.value = f"Recording: {elapsed}s"
             try:
                 self.info_text.update()
             except Exception:
-                pass
+                break
+            await asyncio.sleep(0.5)
 
     async def _toggle_recording(self, e: ft.ControlEvent) -> None:
         """Toggle recording state when mic button is pressed."""
@@ -101,7 +110,10 @@ class MicButton(ft.Column):
 
     async def _start_recording(self) -> None:
         """Requests permission and starts recording."""
-        # Request microphone permission if applicable
+        # Attach overlay in case did_mount didn't catch it
+        if self.page:
+            self.recorder.attach_to_page(self.page)
+
         try:
             has_permission = await self.permission_handler.request(
                 fh.Permission.MICROPHONE
@@ -112,11 +124,16 @@ class MicButton(ft.Column):
                 self.update()
                 return
         except Exception:
-            pass  # Fallback for environments without mobile permission handler
+            pass
 
         try:
-            self.recorder.start()
-            self._set_active_ui(True)
+            started = await self.recorder.start()
+            if started:
+                self._record_start_time = time.time()
+                self._set_active_ui(True)
+                self._timer_task = asyncio.create_task(self._update_timer_loop())
+            else:
+                raise RuntimeError("Hardware audio start failed")
         except Exception as exc:
             logger.error(f"Error starting recording: {exc}")
             self.status_text.value = "Failed to start microphone"
@@ -125,8 +142,11 @@ class MicButton(ft.Column):
 
     async def _stop_recording(self) -> None:
         """Stops recording and finalizes raw audio data."""
+        if self._timer_task:
+            self._timer_task.cancel()
+
         try:
-            raw_bytes = self.recorder.stop()
+            raw_bytes = await self.recorder.stop()
             self._set_active_ui(False)
             self.info_text.value = f"Finished recording: {len(raw_bytes):,} bytes"
             self.info_text.update()
@@ -140,7 +160,6 @@ class MicButton(ft.Column):
     def _set_active_ui(self, active: bool) -> None:
         """Updates UI styling for active (recording) vs inactive (idle) states."""
         if active:
-            # Active state: red mic icon, red accented ring/background
             self.mic_icon_button.icon = ft.Icons.MIC
             self.mic_icon_button.icon_color = ft.Colors.RED
             self.mic_icon_button.tooltip = "Tap to stop recording"
@@ -152,7 +171,6 @@ class MicButton(ft.Column):
             self.info_text.value = "Listening..."
             self.info_text.color = ft.Colors.RED_400
         else:
-            # Inactive state: black / grey mic icon, neutral background
             self.mic_icon_button.icon = ft.Icons.MIC_NONE
             self.mic_icon_button.icon_color = ft.Colors.GREY_700
             self.mic_icon_button.tooltip = "Tap to record"
@@ -170,6 +188,8 @@ class MicButton(ft.Column):
 
     async def cleanup_async(self) -> None:
         """Cleanup audio stream if the view is popped or unmounted."""
+        if self._timer_task:
+            self._timer_task.cancel()
         if self.recorder.is_recording:
-            self.recorder.stop()
+            await self.recorder.stop()
             self._set_active_ui(False)

@@ -6,13 +6,14 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Flet developer", email = "you@example.com" }]
 dependencies = [
-    "ai-edge-litert>=2.2.0",
     "flet>=0.86.4",
     "flet-camera>=0.86.4",
     "flet-permission-handler>=0.86.4",
-    "mediapipe>=1.0.0",
-    "tensorflow-cpu; sys_platform == 'win32'",
-    "tflite-runtime==2.14.0; sys_platform != 'win32'",
+    "websockets",
+    "requests",
+    "flet-audio",
+    "flet-audio-recorder",
+    "pyttsx3>=2.99",
 ]
 
 [dependency-groups]

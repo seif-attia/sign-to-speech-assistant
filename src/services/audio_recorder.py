@@ -1,7 +1,11 @@
+import asyncio
 import logging
-import threading
+import os
+import tempfile
 from typing import Callable, Optional
-import sounddevice as sd
+import flet as ft
+from flet_audio_recorder import AudioRecorder, AudioEncoder
+
 import services.data as data
 
 logger = logging.getLogger(__name__)
@@ -9,28 +13,29 @@ logger = logging.getLogger(__name__)
 
 class AudioRecorderService:
     """
-    Service that captures microphone input using sounddevice, converts the stream
-    into raw 16-bit PCM byte data, and maintains global state in services.data.
+    Android-compatible Audio Recorder service using native Flutter platform channels.
+    Outputs WAV format byte data and supports asynchronous start/stop.
     """
 
     def __init__(
         self,
         sample_rate: int = 16000,
-        channels: int = 1,
-        dtype: str = "int16",
         on_data: Optional[Callable[[bytes], None]] = None,
         on_status_change: Optional[Callable[[bool], None]] = None,
     ):
         self.sample_rate = sample_rate
-        self.channels = channels
-        self.dtype = dtype
         self.on_data = on_data
         self.on_status_change = on_status_change
 
-        self._stream: Optional[sd.RawInputStream] = None
-        self._buffer = bytearray()
-        self._lock = threading.Lock()
         self._is_recording = False
+        self._output_file = os.path.join(tempfile.gettempdir(), "audio_input.wav")
+        self._recorded_bytes = 0
+
+        # Flutter AudioRecorder instance
+        self.recorder = AudioRecorder(
+            audio_encoder=AudioEncoder.WAV,
+            sample_rate=self.sample_rate,
+        )
 
     @property
     def is_recording(self) -> bool:
@@ -38,108 +43,68 @@ class AudioRecorderService:
 
     @property
     def recorded_bytes_count(self) -> int:
-        with self._lock:
-            return len(self._buffer)
+        return self._recorded_bytes
 
-    def _audio_callback(self, indata, frames, time_info, status):
-        """Callback invoked by PortAudio background thread for each incoming buffer."""
-        if status:
-            logger.warning(f"Audio stream status flag: {status}")
+    def attach_to_page(self, page: ft.Page) -> None:
+        """Mounts recorder to page overlay to enable native channel communication."""
+        if page and self.recorder not in page.overlay:
+            page.overlay.append(self.recorder)
+            page.update()
 
-        chunk = bytes(indata)
-        with self._lock:
-            self._buffer.extend(chunk)
-            data.raw_audio_data = bytes(self._buffer)
+    async def start(self) -> bool:
+        """Starts hardware microphone recording."""
+        if self._is_recording:
+            return True
 
-        if self.on_data:
-            try:
-                self.on_data(chunk)
-            except Exception as e:
-                logger.error(f"Error in on_data callback: {e}")
+        try:
+            # Check runtime permission
+            has_perm = await self.recorder.has_permission_async()
+            if not has_perm:
+                logger.warning("Microphone permission denied.")
+                return False
 
-    def start(self) -> bool:
-        """
-        Starts recording audio. Returns True if started successfully, False otherwise.
-        """
-        with self._lock:
-            if self._is_recording:
-                return True
+            if os.path.exists(self._output_file):
+                os.remove(self._output_file)
 
-            try:
-                self._buffer.clear()
-                data.raw_audio_data = b""
-                data.is_recording_audio = True
+            await self.recorder.start_recording_async(self._output_file)
+            self._is_recording = True
+            self._recorded_bytes = 0
+            data.is_recording_audio = True
 
-                self._stream = sd.RawInputStream(
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    dtype=self.dtype,
-                    callback=self._audio_callback,
-                )
-                self._stream.start()
-                self._is_recording = True
-            except Exception as exc:
-                logger.error(f"Failed to start audio recording stream: {exc}")
-                data.is_recording_audio = False
-                self._is_recording = False
-                if self._stream:
-                    try:
-                        self._stream.close()
-                    except Exception:
-                        pass
-                    self._stream = None
-                raise exc
-
-        if self.on_status_change:
-            try:
+            if self.on_status_change:
                 self.on_status_change(True)
-            except Exception as e:
-                logger.error(f"Error in on_status_change callback: {e}")
 
-        return True
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to start recording: {exc}")
+            self._is_recording = False
+            data.is_recording_audio = False
+            return False
 
-    def stop(self) -> bytes:
-        """
-        Stops audio recording and returns all captured raw byte data.
-        """
-        with self._lock:
-            if not self._is_recording:
-                return bytes(self._buffer)
+    async def stop(self) -> bytes:
+        """Stops hardware recording and returns all captured WAV audio bytes."""
+        if not self._is_recording:
+            return getattr(data, "raw_audio_data", b"")
 
+        try:
+            output_url = await self.recorder.stop_recording_async()
             self._is_recording = False
             data.is_recording_audio = False
 
-            if self._stream:
-                try:
-                    self._stream.stop()
-                    self._stream.close()
-                except Exception as exc:
-                    logger.warning(f"Error closing audio stream: {exc}")
-                finally:
-                    self._stream = None
-
-            result = bytes(self._buffer)
-            data.raw_audio_data = result
-
-        if self.on_status_change:
-            try:
+            if self.on_status_change:
                 self.on_status_change(False)
-            except Exception as e:
-                logger.error(f"Error in on_status_change callback: {e}")
 
-        return result
+            target = output_url or self._output_file
+            if target and os.path.exists(target):
+                with open(target, "rb") as f:
+                    raw_bytes = f.read()
+                self._recorded_bytes = len(raw_bytes)
+                data.raw_audio_data = raw_bytes
+                return raw_bytes
 
-    def get_raw_data(self) -> bytes:
-        """Returns the current raw byte buffer."""
-        with self._lock:
-            return bytes(self._buffer)
-
-    def clear(self) -> None:
-        """Clears the internal buffer and global raw audio data."""
-        with self._lock:
-            self._buffer.clear()
-            data.raw_audio_data = b""
-
-    def close(self) -> None:
-        """Cleanup resources."""
-        self.stop()
+            return b""
+        except Exception as exc:
+            logger.error(f"Error stopping recording: {exc}")
+            self._is_recording = False
+            data.is_recording_audio = False
+            return b""
