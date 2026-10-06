@@ -28,7 +28,7 @@ class HomeView(ft.View):
         super().__init__(
             route="/",
             bgcolor=BG_DARK,
-            padding=ft.Padding.only(top=24, left=16, right=16, bottom=16),
+            padding=ft.Padding.only(top=50, left=16, right=16, bottom=16),
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             vertical_alignment=ft.MainAxisAlignment.START,
             navigation_bar=create_nav_bar(0, self.app_page),
@@ -84,7 +84,7 @@ class HomeView(ft.View):
                 ),
                 width=(VIEWPORT_WIDTH - 12) // 2,
                 height=110,
-                padding=14,
+                padding=17,
                 border_radius=16,
                 bgcolor=CARD_BG,
                 border=ft.Border.all(1, CARD_BORDER),
@@ -97,7 +97,7 @@ class HomeView(ft.View):
                 build_mode_tile("Text-to-Text", ft.Icons.KEYBOARD_ALT_OUTLINED, "/text-text"),
                 build_mode_tile("Speech-to-Text", ft.Icons.GRAPHIC_EQ_ROUNDED, "/speech-text"),
             ],
-            spacing=12,
+            spacing=10,
             alignment=ft.MainAxisAlignment.CENTER,
         )
 
@@ -106,7 +106,7 @@ class HomeView(ft.View):
                 build_mode_tile("Speech-to-Speech", ft.Icons.FORUM_OUTLINED, "/speech-speech"),
                 build_mode_tile("Text-to-Speech", ft.Icons.VOLUME_UP_ROUNDED, "/text-speech"),
             ],
-            spacing=12,
+            spacing=10,
             alignment=ft.MainAxisAlignment.CENTER,
         )
 

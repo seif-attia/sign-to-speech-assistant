@@ -36,7 +36,7 @@ class TextToSpeechView(ft.View):
         super().__init__(
             route="/text-speech",
             bgcolor=BG_DARK,
-            padding=ft.Padding.only(top=16, left=16, right=16, bottom=16),
+            padding=ft.Padding.only(top=50, left=16, right=16, bottom=16),
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             vertical_alignment=ft.MainAxisAlignment.START,
             navigation_bar=create_nav_bar(0, self.app_page),
@@ -46,10 +46,10 @@ class TextToSpeechView(ft.View):
             self.selected_lang = "en" if self.selected_lang == "ar" else "ar"
             self.lang_btn_text.value = "Voice: Arabic" if self.selected_lang == "ar" else "Voice: English"
             if self.selected_lang == "ar":
-                self.text_input.value = "مرحباً بكم في تطبيق لغة الإشارة"
+                self.text_input.value = "مرحباً بكم في تطبيق وصال"
                 self.text_input.text_align = ft.TextAlign.RIGHT
             else:
-                self.text_input.value = "Welcome to the Sign Language Assistant"
+                self.text_input.value = "Welcome to Wesal"
                 self.text_input.text_align = ft.TextAlign.LEFT
             self.app_page.update()
 
@@ -103,7 +103,7 @@ class TextToSpeechView(ft.View):
 
         # Input Card
         self.text_input = ft.TextField(
-            value="مرحباً بكم في تطبيق لغة الإشارة",
+            value="مرحباً بكم في تطبيق وصال",
             hint_text="Type text to speak...",
             hint_style=ft.TextStyle(color=TEXT_MUTED, size=15),
             text_style=ft.TextStyle(color=TEXT_PRIMARY, size=16, weight=ft.FontWeight.BOLD),
@@ -146,7 +146,7 @@ class TextToSpeechView(ft.View):
             self.app_page.run_task(_do_speak, val)
 
         generate_btn = ft.Container(
-            content=ft.ElevatedButton(
+            content=ft.Button(
                 content=ft.Row(
                     controls=[
                         ft.Icon(ft.Icons.PLAY_ARROW_ROUNDED, size=20, color=BG_DARK),

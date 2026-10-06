@@ -11,19 +11,25 @@ logger = logging.getLogger(__name__)
 
 class NetworkSignStreamer:
     """
-    Background WebSocket client for streaming camera frames to FastAPI backend.
+    Persistent background WebSocket client for communicating with the FastAPI backend.
+    Maintains a continuous connection from app start across all views and modes.
     Drops lagging/stale frames to maintain real-time low latency.
     """
 
     def __init__(
         self,
-        server_ws_url: str,
-        on_result_callback: Callable[[dict], None],
+        server_ws_url: Optional[str] = None,
+        on_result_callback: Optional[Callable[[dict], None]] = None,
         on_status_callback: Optional[Callable[[str], None]] = None,
     ):
-        self.server_ws_url = server_ws_url
-        self.on_result = on_result_callback
-        self.on_status = on_status_callback
+        from services.config import get_server_ws_url
+        self.server_ws_url = server_ws_url or get_server_ws_url()
+        self._result_callbacks: list[Callable[[dict], None]] = []
+        self._status_callbacks: list[Callable[[str], None]] = []
+        if on_result_callback:
+            self._result_callbacks.append(on_result_callback)
+        if on_status_callback:
+            self._status_callbacks.append(on_status_callback)
 
         self.is_running = False
         self._latest_payload: Optional[str] = None
@@ -31,6 +37,35 @@ class NetworkSignStreamer:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._active_ws = None
+        self.last_status: str = "Connecting..."
+
+    def register_result_callback(self, cb: Callable[[dict], None]):
+        """Registers a listener for incoming server messages."""
+        with self._lock:
+            if cb not in self._result_callbacks:
+                self._result_callbacks.append(cb)
+
+    def unregister_result_callback(self, cb: Callable[[dict], None]):
+        """Unregisters a listener."""
+        with self._lock:
+            if cb in self._result_callbacks:
+                self._result_callbacks.remove(cb)
+
+    def register_status_callback(self, cb: Callable[[str], None]):
+        """Registers a listener for connection status changes."""
+        with self._lock:
+            if cb not in self._status_callbacks:
+                self._status_callbacks.append(cb)
+        try:
+            cb(self.last_status)
+        except Exception:
+            pass
+
+    def unregister_status_callback(self, cb: Callable[[str], None]):
+        """Unregisters a status listener."""
+        with self._lock:
+            if cb in self._status_callbacks:
+                self._status_callbacks.remove(cb)
 
     def update_url(self, new_ws_url: str):
         """Updates the WebSocket endpoint and forces reconnection if connected."""
@@ -53,10 +88,20 @@ class NetworkSignStreamer:
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._ws_handler())
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, RuntimeError):
             pass
         finally:
-            self._loop.close()
+            try:
+                # Cancel all remaining tasks cleanly
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+            finally:
+                self._loop.close()
 
     def queue_frame(self, frame_bytes: bytes, is_front: bool = True, rotate: int = 0, target_lang: str = "en"):
         """Enqueues latest frame as Base64 string or JSON payload with target translation language."""
@@ -72,10 +117,21 @@ class NetworkSignStreamer:
         with self._lock:
             self._latest_payload = payload
 
+    def send_command(self, action: str):
+        """Sends an immediate action command (e.g. 'clear_sentence') to the server."""
+        if not self.is_running:
+            return
+        payload = json.dumps({"action": action})
+        with self._lock:
+            self._latest_payload = payload
+
     def _notify_status(self, msg: str):
-        if self.on_status:
+        self.last_status = msg
+        with self._lock:
+            cbs = list(self._status_callbacks)
+        for cb in cbs:
             try:
-                self.on_status(msg)
+                cb(msg)
             except Exception as ex:
                 logger.debug(f"Error in status callback: {ex}")
 
@@ -118,8 +174,13 @@ class NetworkSignStreamer:
                         while self.is_running:
                             msg = await ws.recv()
                             data = json.loads(msg)
-                            if self.on_result:
-                                self.on_result(data)
+                            with self._lock:
+                                cbs = list(self._result_callbacks)
+                            for cb in cbs:
+                                try:
+                                    cb(data)
+                                except Exception as exc:
+                                    logger.debug(f"Error in result callback: {exc}")
 
                     # Run sender and receiver concurrently until one exits/fails
                     tasks = [
@@ -146,3 +207,31 @@ class NetworkSignStreamer:
         self.is_running = False
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
+
+
+# --- Global Persistent WebSocket Streamer ---
+_global_streamer: Optional[NetworkSignStreamer] = None
+_streamer_lock = threading.Lock()
+
+
+def get_global_streamer() -> NetworkSignStreamer:
+    """
+    Returns the persistent global WebSocket client, initializing and starting it
+    if it hasn't already been started. Maintains a persistent connection across the app.
+    """
+    global _global_streamer
+    with _streamer_lock:
+        if _global_streamer is None:
+            from services.config import get_server_ws_url
+            _global_streamer = NetworkSignStreamer(server_ws_url=get_server_ws_url())
+            _global_streamer.start()
+        return _global_streamer
+
+
+def stop_global_streamer() -> None:
+    """Stops the global WebSocket client on application shutdown."""
+    global _global_streamer
+    with _streamer_lock:
+        if _global_streamer is not None:
+            _global_streamer.stop()
+            _global_streamer = None

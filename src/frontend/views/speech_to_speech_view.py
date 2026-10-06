@@ -15,7 +15,7 @@ from frontend.theme import (
 )
 from frontend.components.bottom_nav_bar import create_nav_bar
 from components.mic_button import MicButton
-from services.fastapi_endpoint import translate_text, play_speech
+from services.fastapi_endpoint import translate_text, play_speech, transcribe_audio
 
 class SpeechToSpeechView(ft.View):
     """
@@ -35,7 +35,7 @@ class SpeechToSpeechView(ft.View):
         super().__init__(
             route="/speech-speech",
             bgcolor=BG_DARK,
-            padding=ft.Padding.only(top=16, left=16, right=16, bottom=16),
+            padding=ft.Padding.only(top=50, left=16, right=16, bottom=16),
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             vertical_alignment=ft.MainAxisAlignment.START,
             navigation_bar=create_nav_bar(0, self.app_page),
@@ -131,22 +131,41 @@ class SpeechToSpeechView(ft.View):
             self.listening_state.value = "Translating & Synthesizing Voice..."
             self.app_page.update()
 
-            # Process demo / live translation pair
-            if self.is_ar_to_en:
-                spoken = "صباح الخير، كيف حالك؟"
-                translated = await translate_text(spoken, source_lang="ar", target_lang="en")
-                target_lang = "en"
-            else:
-                spoken = "Good morning, how are you?"
-                translated = await translate_text(spoken, source_lang="en", target_lang="ar")
-                target_lang = "ar"
+            # 1. Transcribe actual user speech from microphone
+            source_lang = "ar" if self.is_ar_to_en else "en"
+            target_lang = "en" if self.is_ar_to_en else "ar"
+
+            self.listening_state.value = f"Transcribing {'Arabic' if self.is_ar_to_en else 'English'} Speech..."
+            self.app_page.update()
+
+            stt_res = await transcribe_audio(wav_bytes, lang=source_lang)
+            spoken = stt_res.get("text", "").strip()
+
+            if not spoken:
+                err_msg = stt_res.get("error", "Could not understand speech.")
+                self.recognized_output.value = f'"{err_msg}"'
+                self.translated_output.value = '➔ "Please try speaking again."'
+                self.listening_state.value = (
+                    "Listening in Arabic..." if self.is_ar_to_en else "Listening in English..."
+                )
+                self.app_page.update()
+                return
 
             self.recognized_output.value = f'"{spoken}"'
+            self.listening_state.value = "Translating & Synthesizing Voice..."
+            self.app_page.update()
+
+            # 2. Translate transcribed speech
+            translated = await translate_text(spoken, source_lang=source_lang, target_lang=target_lang)
             self.translated_output.value = f'➔ "{translated}"'
             self.listening_state.value = "Speaking Translation via Sherpa-ONNX..."
             self.app_page.update()
 
-            self.app_page.run_task(play_speech, self.app_page, translated, target_lang)
+            # 3. Speak translation out loud via neural TTS
+            try:
+                await play_speech(self.app_page, translated, target_lang)
+            except Exception:
+                pass
 
             self.listening_state.value = (
                 "Listening in Arabic..." if self.is_ar_to_en else "Listening in English..."

@@ -1,6 +1,6 @@
 [project]
-name = "signassistant"
-version = "0.1.0"
+name = "Wesal"
+version = "1.0.0"
 description = ""
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,8 +14,12 @@ dependencies = [
     "flet-audio",
     "sherpa-onnx>=1.13.7",
     "flet-audio-recorder>=0.86.4",
-    "pillow>=12.3.0",
+    "pillow==12.2.0",
 ]
+
+
+[tool.flet.icons]
+android = "assets/icon.png"
 
 [dependency-groups]
 dev = [
@@ -47,3 +51,4 @@ path = "src"
 
 [tool.flet.android]
 uses_cleartext_traffic = true
+adaptive_icon_background = "#ffffff"

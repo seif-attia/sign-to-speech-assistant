@@ -9,7 +9,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_HOST = os.environ.get("SIGN_SERVER_HOST", "192.168.1.43")
+_DEFAULT_HOST = os.environ.get("SIGN_SERVER_HOST", "10.147.150.208")
 _DEFAULT_PORT = int(os.environ.get("SIGN_SERVER_PORT", "8000"))
 
 _current_host: str = _DEFAULT_HOST

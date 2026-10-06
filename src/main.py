@@ -1,4 +1,31 @@
 import flet as ft
+from flet.messaging.session import Session
+
+# --- Gracefully handle late invoke_method responses from disposed controls ---
+_original_handle_invoke = Session.handle_invoke_method_results
+
+def _safe_handle_invoke_method_results(self, control_id: int, call_id: str, result, error):
+    """
+    Prevents crashing when asynchronous invoke_method responses (e.g. from camera,
+    audio, recorder) return from Flutter after a control was unmounted during navigation.
+    """
+    try:
+        _original_handle_invoke(self, control_id, call_id, result, error)
+    except RuntimeError as exc:
+        if "is not registered" in str(exc):
+            # Control was unmounted/disposed while Flutter bridge call was in flight.
+            # Safely resolve any pending future so callers don't hang, without throwing.
+            method_calls = getattr(self, "_Session__method_calls", {})
+            method_call_results = getattr(self, "_Session__method_call_results", {})
+            evt = method_calls.pop(call_id, None)
+            if evt is not None:
+                method_call_results[evt] = (result, error)
+                evt.set()
+        else:
+            raise
+
+Session.handle_invoke_method_results = _safe_handle_invoke_method_results
+
 from frontend.views.intro_view import IntroView
 from frontend.views.home_view import HomeView
 from frontend.views.sign_to_speech_view import SignToSpeechView
@@ -10,9 +37,20 @@ from frontend.views.educational_view import EducationalView
 from frontend.views.contribution_view import ContributionView
 from frontend.views.settings_view import SettingsView
 from frontend.theme import BG_DARK
+import flet_audio as fa
+from services.network_stream_service import get_global_streamer, stop_global_streamer
 
 
 async def main(page: ft.Page) -> None:
+    # Initialize persistent WebSocket connection to backend from the moment the app starts
+    get_global_streamer()
+
+    # Register persistent Audio player in page.services so TTS playback is ready across all views
+    tts_player = fa.Audio(autoplay=False, volume=1.0)
+    setattr(page, "_app_tts_audio_service", tts_player)
+    if hasattr(page, "services"):
+        page.services.append(tts_player)
+
     # --- Page Configuration ---
     page.title = "WESAL - Sign & Speech Assistant"
     page.theme_mode = ft.ThemeMode.DARK
@@ -71,6 +109,7 @@ async def main(page: ft.Page) -> None:
             current_view = page.views[-1]
             if hasattr(current_view, "cleanup_async"):
                 await current_view.cleanup_async()
+        stop_global_streamer()
 
     # --- Router Configuration ---
     page.on_route_change = route_change

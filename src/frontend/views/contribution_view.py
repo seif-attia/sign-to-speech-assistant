@@ -27,7 +27,7 @@ class ContributionView(ft.View):
         super().__init__(
             route="/contribute",
             bgcolor=BG_DARK,
-            padding=ft.Padding.only(top=24, left=16, right=16, bottom=16),
+            padding=ft.Padding.only(top=50, left=16, right=16, bottom=16),
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             vertical_alignment=ft.MainAxisAlignment.START,
             navigation_bar=create_nav_bar(2, self.app_page),

@@ -16,6 +16,7 @@ from frontend.theme import (
 )
 from frontend.components.bottom_nav_bar import create_nav_bar
 from components.mic_button import MicButton
+from services.fastapi_endpoint import play_speech, transcribe_audio
 
 class SpeechToTextView(ft.View):
     """
@@ -34,7 +35,7 @@ class SpeechToTextView(ft.View):
         super().__init__(
             route="/speech-text",
             bgcolor=BG_DARK,
-            padding=ft.Padding.only(top=16, left=16, right=16, bottom=16),
+            padding=ft.Padding.only(top=50, left=16, right=16, bottom=16),
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             vertical_alignment=ft.MainAxisAlignment.START,
             navigation_bar=create_nav_bar(0, self.app_page),
@@ -111,15 +112,25 @@ class SpeechToTextView(ft.View):
             self.transcription_text.value = f"Captured {len(wav_bytes):,} bytes of audio. Processing..."
             self.app_page.update()
 
-            # For demonstration & backend ASR integration:
-            # We provide a prompt translation / transcription response
-            sample_phrase = (
-                "مرحباً بكم، تم تسجيل الصوت بنجاح وجاري المعالجة الفورية." if self.active_lang == "ar"
-                else "Hello, audio recorded successfully and is being processed."
-            )
-            self.transcription_text.value = f'"{sample_phrase}"'
-            self.live_badge_text.value = "TRANSCRIPTION COMPLETE"
-            self.app_page.update()
+            # Call backend speech-to-text API with actual recorded audio
+            result = await transcribe_audio(wav_bytes, lang=self.active_lang)
+            recognized = result.get("text", "").strip()
+
+            if recognized:
+                self.transcription_text.value = f'"{recognized}"'
+                self.live_badge_text.value = "TRANSCRIPTION COMPLETE"
+                self.app_page.update()
+
+                # Optional TTS echo feedback
+                try:
+                    await play_speech(self.app_page, recognized, lang=self.active_lang)
+                except Exception:
+                    pass
+            else:
+                err_msg = result.get("error", "Could not transcribe audio. Please try speaking clearly.")
+                self.transcription_text.value = f'"{err_msg}"'
+                self.live_badge_text.value = "TRANSCRIPTION FAILED"
+                self.app_page.update()
 
         def on_audio_recorded(wav_bytes: bytes):
             self.app_page.run_task(_handle_recorded_audio, wav_bytes)

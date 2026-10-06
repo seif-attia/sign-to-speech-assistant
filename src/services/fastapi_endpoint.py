@@ -70,6 +70,27 @@ async def translate_text(text: str, source_lang: str = "ar", target_lang: str = 
         return f"Connection error: {e}"
 
 
+async def transcribe_audio(wav_bytes: bytes, lang: str = "ar") -> dict:
+    """Sends recorded WAV bytes to backend /transcribe endpoint for speech recognition."""
+    if not wav_bytes or len(wav_bytes) < 100:
+        return {"text": "", "error": "No audio recorded"}
+
+    base_url = get_server_base_url()
+    b64_audio = base64.b64encode(wav_bytes).decode("ascii")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(
+                f"{base_url}/transcribe",
+                json={"audio_b64": b64_audio, "lang": lang},
+            )
+            if res.status_code == 200:
+                return res.json()
+            return {"text": "", "error": f"Server error ({res.status_code})"}
+    except Exception as e:
+        logger.error(f"Transcription network error: {e}")
+        return {"text": "", "error": f"Connection error: {e}"}
+
+
 async def synthesize_speech_bytes(text: str, lang: str = "en", speed: float = 1.0) -> bytes:
     """Synthesizes text using backend Sherpa-ONNX and returns WAV bytes."""
     if not text.strip():
