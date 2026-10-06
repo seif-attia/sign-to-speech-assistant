@@ -1,6 +1,6 @@
 [project]
-name = "signassistant"
-version = "0.1.0"
+name = "Wesal"
+version = "1.0.0"
 description = ""
 readme = "README.md"
 requires-python = ">=3.10"
@@ -9,8 +9,17 @@ dependencies = [
     "flet>=0.86.4",
     "flet-camera>=0.86.4",
     "flet-permission-handler>=0.86.4",
-    "mediapipe>=1.0.0",
+    "websockets",
+    "requests",
+    "flet-audio",
+    "sherpa-onnx>=1.13.7",
+    "flet-audio-recorder>=0.86.4",
+    "pillow==12.2.0",
 ]
+
+
+[tool.flet.icons]
+android = "assets/icon.png"
 
 [dependency-groups]
 dev = [
@@ -25,12 +34,21 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.flet]
 org = "com.mycompany"
 product = "signassistant"
 company = "Flet"
 copyright = "Copyright (C) 2023-2026 by Flet"
-permission = ["camera"]
+permission = ["camera", "microphone"]
 [tool.flet.app]
 path = "src"
+
+[tool.flet.android.permission]
+"android.permission.RECORD_AUDIO" = true
+"android.permission.MODIFY_AUDIO_SETTINGS" = true
+
+[tool.flet.android]
+uses_cleartext_traffic = true
+adaptive_icon_background = "#ffffff"
